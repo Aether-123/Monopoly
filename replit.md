@@ -104,12 +104,12 @@ Full-featured Monopoly Online multiplayer game. Architecture:
   - `public/game/game.js` — full game engine client (~1965 lines)
   - `public/game/game.css` — vibrant dark theme styling with 8 group colors
   - `src/App.tsx` — simple redirect to `/game/index.html`
-- **Backend**: Python FastAPI + Socket.IO server (`server/server.py`, `server/engine.py`)
+- **Backend**: Node.js + Express + Socket.IO server (`server/server.js`, `server/engine.js`)
   - Runs on port 8001 (GAME_PORT env var)
-  - Engine: `server/engine.py` — 27 countries, city prices $20–$510, railways, airports, hazards, surprises
-- **Startup**: `pnpm run dev` launches Python backend (port 8001) then Vite (PORT env var)
-- **Proxy**: Vite proxies `/socket.io/` and `/mapi/` to Python backend on port 8001
-  - NOTE: `/api/` prefix is claimed by the api-server artifact (Express), so the monopoly game uses `/mapi/` prefix for all Python backend REST routes
+  - Engine: `server/engine.js` — 27 countries, city prices $20–$510, railways, airports, hazards, surprises, full bank/auction logic (complete ES module port from Python)
+- **Startup**: `pnpm run dev` launches Node.js backend (port 8001) then Vite (PORT env var)
+- **Proxy**: Vite proxies `/socket.io/` (ws:true, secure:false) and `/mapi/` to Node.js backend on port 8001
+  - NOTE: `/api/` prefix is claimed by the api-server artifact (Express), so the monopoly game uses `/mapi/` prefix for all REST routes
   - Countries API returns `base` field so client can compute city price = `base + index * 10`
 
 **Key features**: 27 countries, real-time Socket.IO multiplayer, map editor (drag & drop), bank system (full modal with tabs), custom avatars, 8 board types (standard/worldwide/random/domestic), railways, airports, hazards (dedicated modal with insurance claim), auctions (SVG countdown ring), surprise card flip animation, gov protection modal, credit-card property purchase, votekick, spectator mode, reconnection grace (2 min), 8 themes.
@@ -120,4 +120,4 @@ Full-featured Monopoly Online multiplayer game. Architecture:
 
 **Event modals**: `m-haz` for hazard events (themed icons, insurance claim button), `m-surp` for surprise events (card-flip animation), `m-gov` for government protection events.
 
-- `pnpm --filter @workspace/monopoly-game run dev` — starts both Python backend and Vite dev server
+- `pnpm --filter @workspace/monopoly-game run dev` — starts both Node.js backend and Vite dev server
