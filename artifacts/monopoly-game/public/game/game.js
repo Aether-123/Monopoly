@@ -1520,7 +1520,7 @@ async function openEditor(){
   ss("editor");
   if(!editorCountries.length){
     const pool=qid("editor-country-pool");
-    if(pool)pool.innerHTML=`<div style="padding:1rem;text-align:center;color:var(--muted)">⏳ Loading countries…</div>`;
+    if(pool)pool.innerHTML=`<div style="padding:1.2rem;text-align:center;color:var(--muted)"><div class="spin-ring" style="width:26px;height:26px;margin:0 auto .5rem;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite"></div>Loading countries…</div>`;
     let loaded=false;
     for(let attempt=0;attempt<3;attempt++){
       try{
@@ -1837,8 +1837,11 @@ function editorLoadJSONFile(input){
 }
 
 async function editorLaunchGame(isPrivate){
-  if(!socket?.connected){toast("⚠️ Not connected");socket?.connect();await sleep(1500);}
-  if(!socket?.connected){toast("❌ Cannot connect");return;}
+  if(!socket?.connected){
+    socket?.connect();
+    const ok=await _waitForConnect(5000);
+    if(!ok){toast("❌ Cannot connect to server");return;}
+  }
   editorSettings.privateRoom=isPrivate;
   const nm=(qid("ed-name")?.value||qid("cr-name")?.value||"Player").trim();
   const spaces=buildEditorFullBoard(editorSize);

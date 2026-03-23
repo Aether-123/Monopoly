@@ -43,6 +43,7 @@ button { cursor: pointer; }
 .online-dot { color: var(--green); animation: pulse 2s infinite; }
 .conn-info { font-size: .72rem; color: var(--muted); margin-top: .25rem; }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 .theme-bar { display: flex; gap: .38rem; justify-content: center; margin-bottom: 1rem; flex-wrap: wrap; }
 .tbtn { width: 26px; height: 26px; border-radius: 50%; cursor: pointer; transition: .15s; border: 2px solid transparent; }
