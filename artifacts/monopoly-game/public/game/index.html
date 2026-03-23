@@ -88,9 +88,9 @@
     <button class="bttab on"  onclick="setBoardType('standard',this)">🌍 Standard</button>
     <button class="bttab"     onclick="setBoardType('worldwide',this)">🗺️ Worldwide</button>
     <button class="bttab"     onclick="setBoardType('random',this)">🎲 Random</button>
-    <button class="bttab"     onclick="setBoardType('india',this)">🇮🇳 India</button>
-    <button class="bttab"     onclick="setBoardType('uk',this)">🇬🇧 UK</button>
-    <button class="bttab"     onclick="setBoardType('usa',this)">🇺🇸 USA</button>
+    <button class="bttab"     onclick="setBoardType('india',this)"><img class="tab-flag-img" src="game/flags/16x12/in.png" alt="India flag" onerror="this.remove()">India</button>
+    <button class="bttab"     onclick="setBoardType('uk',this)"><img class="tab-flag-img" src="game/flags/16x12/gb.png" alt="UK flag" onerror="this.remove()">UK</button>
+    <button class="bttab"     onclick="setBoardType('usa',this)"><img class="tab-flag-img" src="game/flags/16x12/us.png" alt="USA flag" onerror="this.remove()">USA</button>
     <button class="bttab" style="border-color:var(--accent)66" onclick="openEditor()">🎨 Custom Editor</button>
   </div>
   <div class="boards-layout">
@@ -298,7 +298,7 @@
     <div class="lbox"><h3>Settings</h3><div id="lobby-settings"></div></div>
   </div>
   <div style="display:flex;gap:.55rem;flex-wrap:wrap;justify-content:center">
-    <button class="btn btn-out" onclick="openSetup()">⚙️ Rules</button>
+    <button class="btn btn-out" id="rules-btn" onclick="openSetup()">⚙️ Rules</button>
     <button class="btn btn-acc" id="start-btn" onclick="startGame()" style="display:none">▶ Start Game</button>
   </div>
   <div class="lbox" style="width:100%;max-width:500px">
@@ -325,6 +325,8 @@
         <button class="btn btn-sm btn-out" onclick="sendChat()">→</button>
       </div>
     </div>
+    <div class="panel-hdr" style="border-top:1px solid var(--border)">📊 Live Status</div>
+    <div id="panel-status" class="panel-scroll" style="max-height:220px"></div>
   </div>
   <div class="gl-center">
     <div class="game-area" id="game-area">
@@ -332,14 +334,14 @@
         <div class="board" id="game-board"></div>
         <div class="board-wm">MONOPOLY</div>
       </div>
+      <div id="action-bar">
+        <div id="turn-box" class="turn-box">Loading…</div>
+        <div id="ablist" class="ablist"></div>
+      </div>
       <div class="dice-over dh" id="dice-over" onclick="rollDice()">
         <div class="dice-row"><div class="die" id="d1">⚀</div><div class="die" id="d2">⚀</div></div>
         <div class="dice-hint" id="dice-hint-txt">🎲 Click to Roll!</div>
       </div>
-    </div>
-    <div id="action-bar">
-      <div id="turn-box" class="turn-box">Loading…</div>
-      <div id="ablist" class="ablist"></div>
     </div>
   </div>
   <div class="gl-right">

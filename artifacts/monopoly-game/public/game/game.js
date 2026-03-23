@@ -13,6 +13,8 @@ let currentTheme=localStorage.getItem("mono_theme")||"dark";
 let incomingTrade=null, _tradeTarget=null, tFromSel=[], tToSel=[];
 let avatarReturnScreen="land";
 let _auctionTimer=null, _auctionSecsLeft=10;
+let _diceRolling=false;
+let _isLobbyHost=false;
 
 /* ─── AVATAR STATE ─────────────────────────────────────── */
 let myAvatar=JSON.parse(localStorage.getItem("mono_avatar")||"null")||
@@ -45,6 +47,9 @@ let editorCustomSpaces=null; // custom board from editor
 const CUR=()=>gs?.settings?.currency||"$";
 const DF=["⚀","⚁","⚂","⚃","⚄","⚅"];
 const GRP_COLORS=["#ef4444","#f97316","#22c55e","#3b82f6","#a855f7","#ec4899","#14b8a6","#6366f1"];
+const COUNTRY_CODE_BY_NAME={
+  "Nigeria":"ng","Pakistan":"pk","Bangladesh":"bd","Egypt":"eg","Philippines":"ph","Turkey":"tr","Thailand":"th","Indonesia":"id","Argentina":"ar","Poland":"pl","Mexico":"mx","Brazil":"br","China":"cn","Spain":"es","Italy":"it","South Korea":"kr","Russia":"ru","Canada":"ca","Australia":"au","France":"fr","Germany":"de","United Kingdom":"gb","India":"in","Japan":"jp","Netherlands":"nl","United States":"us","Singapore":"sg","Switzerland":"ch"
+};
 function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
 function qs(s){return document.querySelector(s);}
 function qid(id){return document.getElementById(id);}
@@ -52,6 +57,39 @@ function om(id){qid(id)?.classList.remove("ovh");}
 function cm(id){qid(id)?.classList.add("ovh");}
 function ga(action,data={}){socket?.emit("game_action",{action,data});}
 function sanitize(s,n=200){return String(s||"").replace(/[<>&"']/g,"").trim().slice(0,n);}
+function calcTieredRents(price){
+  const p=Math.max(0,Number(price)||0);
+  const bands=[
+    {max:80,lo:6,hi:10},
+    {max:140,lo:10,hi:20},
+    {max:200,lo:20,hi:35},
+    {max:260,lo:35,hi:55},
+    {max:330,lo:55,hi:80},
+    {max:Infinity,lo:80,hi:120},
+  ];
+  let minP=0,base=10;
+  for(const b of bands){
+    if(p<=b.max){
+      const span=Number.isFinite(b.max)?Math.max(1,b.max-minP):Math.max(1,p-minP);
+      const t=Number.isFinite(b.max)?Math.max(0,Math.min(1,(p-minP)/span)):1;
+      base=Math.round(b.lo+(b.hi-b.lo)*t);
+      break;
+    }
+    minP=b.max+1;
+  }
+  return [base,Math.round(base*4),Math.round(base*10),Math.round(base*22),Math.round(base*36),Math.round(base*50)];
+}
+function getCountryCode(sp){
+  const direct=String(sp?.countryCode||"").toLowerCase();
+  if(direct)return direct;
+  return COUNTRY_CODE_BY_NAME[sp?.countryName||""]||"";
+}
+function flagImg(countryCode,countryFlag,countryName,cls="flag-inline"){
+  const code=String(countryCode||"").toLowerCase();
+  if(!code)return countryFlag||"";
+  const nm=sanitize(countryName||"Country",40);
+  return `<img class="${cls}" src="flags/16x12/${code}.png" alt="${nm} flag" onerror="this.onerror=null;this.replaceWith(document.createTextNode('${countryFlag||"🏳️"}'))">`;
+}
 
 /* ─── THEMES ───────────────────────────────────────────── */
 const THEMES={
@@ -319,6 +357,19 @@ async function animateTokenStep(playerId,from,to,boardLen){
   const {cPx,tPx}=getBoardDims(S);
   let cur=from;
   const steps=to>=from?to-from:boardLen-from+to;
+  if(steps>12){
+    const tok=qid("tok-"+playerId);
+    if(tok){
+      const {x,y}=txy(to,S,cPx,tPx);
+      const off=getTokenOffsets(playerId);
+      tok.style.left=(x+off.ox-18)+"px";
+      tok.style.top=(y+off.oy-18)+"px";
+      tok.classList.remove("landing");void tok.offsetWidth;tok.classList.add("landing");
+      flashTile(to);
+    }
+    _tokenMoving=false;
+    return;
+  }
   for(let i=0;i<steps;i++){
     cur=(cur+1)%boardLen;
     const tok=qid("tok-"+playerId);if(!tok)break;
@@ -350,22 +401,22 @@ function getBoardDims(S){
 }
 function gridPos(pos,S){
   const C=S+1;
-  if(pos===0)return{col:S+2,row:S+2};
-  if(pos<C)return{col:S+2-pos,row:S+2};
-  if(pos===C)return{col:1,row:S+2};
-  if(pos<2*C)return{col:1,row:S+2-(pos-C)};
-  if(pos===2*C)return{col:1,row:1};
-  if(pos<3*C)return{col:pos-2*C+1,row:1};
-  if(pos===3*C)return{col:S+2,row:1};
-  return{col:S+2,row:pos-3*C+1};
+  if(pos===0)return{col:1,row:1};
+  if(pos<C)return{col:pos+1,row:1};
+  if(pos===C)return{col:S+2,row:1};
+  if(pos<2*C)return{col:S+2,row:pos-C+1};
+  if(pos===2*C)return{col:S+2,row:S+2};
+  if(pos<3*C)return{col:S+2-(pos-2*C),row:S+2};
+  if(pos===3*C)return{col:1,row:S+2};
+  return{col:1,row:S+2-(pos-3*C)};
 }
 function sideOf(pos,S){
   const C=S+1,corners=[0,C,2*C,3*C];
   if(corners.includes(pos))return"corner";
-  if(pos>0&&pos<C)return"bottom";
-  if(pos>C&&pos<2*C)return"left";
-  if(pos>2*C&&pos<3*C)return"top";
-  return"right";
+  if(pos>0&&pos<C)return"top";
+  if(pos>C&&pos<2*C)return"right";
+  if(pos>2*C&&pos<3*C)return"bottom";
+  return"left";
 }
 function txy(pos,S,cPx,tPx){
   const{col,row}=gridPos(pos,S);
@@ -387,7 +438,7 @@ function renderGame(init){
   renderActions();
   renderSidePanels();
 }
-function renderSidePanels(){renderPlayersPanel();renderPropsPanel();renderTradePanel();renderBankPanel();}
+function renderSidePanels(){renderPlayersPanel();renderPropsPanel();renderStatusPanel();renderTradePanel();renderBankPanel();}
 
 /* ─── BOARD RENDER ──────────────────────────────────────── */
 function renderBoard(){
@@ -408,13 +459,13 @@ function renderBoard(){
 
   const ICONS={
     airport:"✈️",railway:"🚂",gov_prot:"🏛️",chest:"📦",
-    chance:"❓",income_tax:"💰",property_tax:"🏠",
+    chance:"❓",income_tax:"💰",property_tax:"🏠",tax_return:"$",
     gains_tax:"📈",luxury_tax:"💸",empty:"·"
   };
   const CORNERS={
     0:{ico:"🚀",lbl:"START",bg:"linear-gradient(135deg,var(--corner),color-mix(in srgb,var(--green) 20%,var(--corner)))"},
     [C]:{ico:"⛓️",lbl:"JAIL",bg:"linear-gradient(135deg,var(--corner),color-mix(in srgb,var(--orange) 18%,var(--corner)))"},
-    [2*C]:{ico:"🅿️",lbl:"FREE",bg:"linear-gradient(135deg,var(--corner),color-mix(in srgb,var(--purple) 18%,var(--corner)))"},
+    [2*C]:{ico:"💰",lbl:"TREASURE",bg:"linear-gradient(135deg,var(--corner),color-mix(in srgb,var(--purple) 18%,var(--corner)))"},
     [3*C]:{ico:"👮",lbl:"GO JAIL",bg:"linear-gradient(135deg,var(--corner),color-mix(in srgb,var(--red) 20%,var(--corner)))"}
   };
 
@@ -425,6 +476,7 @@ function renderBoard(){
     const isCorner=CORNERS[pos]!=null;
     const isHaz=pos===gs.hazardPos,isTR=pos===gs.taxReturnPos,isRT=pos===gs.randomTaxPos;
     const hasFullSet=sp?.group&&sp?.owner&&gs.board.filter(s=>s.group===sp.group&&s.type==="property").every(s=>s.owner===sp.owner);
+    const setBonusOn=gs?.settings?.doubleRentOnSet!==false;
 
     const div=document.createElement("div");
     div.dataset.pos=pos;
@@ -436,7 +488,7 @@ function renderBoard(){
     if(isHaz)cls+=" sphaz";
     if(isTR)cls+=" sptaxret";
     if(isRT)cls+=" sprandomtax";
-    if(hasFullSet)cls+=" sp-fullset";
+    if(hasFullSet&&setBonusOn)cls+=" sp-fullset";
     div.className=cls;
 
     if(isCorner){
@@ -445,7 +497,11 @@ function renderBoard(){
       div.style.background=c.bg;
       div.innerHTML=`<div class="ci"><span class="ci-ico">${c.ico}</span><span class="ci-lbl">${c.lbl}</span></div>`;
     }else{
-      let ico=isHaz?"☠️":isTR?"📋":isRT?"🎲":(ICONS[sp?.type]||sp?.countryFlag||"🏙️");
+      const cFlag=sp?.countryFlag||"";
+      const cCode=getCountryCode(sp);
+      const cName=sp?.countryName||"";
+      const propertyIcon=sp?.type==="property"?flagImg(cCode,cFlag,cName,"tile-flag-icon"):"";
+      let ico=propertyIcon||(isHaz?"☠️":isTR?"$":isRT?"🎲":(ICONS[sp?.type]||"🏙️"));
 
       // Owner: colored border glow + ownership dot — only when owned
       let ownerDot="";
@@ -462,11 +518,21 @@ function renderBoard(){
       const housesHTML=h>0?`<div class="sp-hs">${h===5?'<div class="htl"></div>':Array(h).fill('<div class="hd"></div>').join("")}</div>`:"";
 
       // 2x badge
-      const badge2x=hasFullSet&&h===0?'<div class="set-2x-badge">2×</div>':"";
+      const badge2x=hasFullSet&&setBonusOn&&h===0?'<div class="set-2x-badge">2×</div>':"";
 
       const priceHTML=sp?.price?`<div class="sp-pr">${CUR()}${sp.price}</div>`:"";
+      const cPos=side==="top"?"top":"bottom";
+      const cFlagHtml=flagImg(cCode,cFlag,cName,"sp-country-flag-img");
+      const shouldShowOuterCountryBadge=(side==="top"||side==="bottom");
+      const countryHTML=sp?.type==="property"&&cName&&shouldShowOuterCountryBadge
+        ?`<div class="sp-country sp-country-${cPos}"><span class="sp-country-flag">${cFlagHtml}</span><span class="sp-country-name">${cName}</span></div>`
+        :"";
+      const sideIsVertical=(side==="left"||side==="right");
+      const bodyHTML=sideIsVertical
+        ?`<div class="sp-body"><div class="sp-nm">${sp?.name||""}</div>${priceHTML}<div class="sp-ico sp-ico-under">${ico}</div></div>`
+        :`<div class="sp-body"><div class="sp-ico">${ico}</div><div class="sp-nm">${sp?.name||""}</div>${priceHTML}</div>`;
 
-      div.innerHTML=`<div class="sp-body"><div class="sp-ico">${ico}</div><div class="sp-nm">${sp?.name||""}</div>${priceHTML}</div>${housesHTML}${ownerDot}${badge2x}`;
+      div.innerHTML=`${bodyHTML}${countryHTML}${housesHTML}${ownerDot}${badge2x}`;
     }
     board.appendChild(div);
   }
@@ -530,11 +596,32 @@ function renderPropsPanel(){
     const hasSet=sp.group&&gs.board.filter(s=>s.group===sp.group&&s.type==="property").every(s=>s.owner===me.id);
     return `<div class="my-prop-item${hasSet?" has-set":""}" onclick="showPropModal(${pos})">
       <div class="my-prop-dot" style="background:${gc}"></div>
-      <div class="my-prop-nm">${sp.countryFlag||""}${sp.name}</div>
+      <div class="my-prop-nm">${flagImg(sp.countryCode,sp.countryFlag,sp.countryName,"flag-inline-sm")}${sp.name}</div>
       <div class="my-prop-hs">${sp.mortgaged?"🔒":h===5?"🏨":h>0?"🏠".repeat(h):""}</div>
       ${hasSet?`<div class="set-dot" title="Full set — 2× rent">★</div>`:""}
     </div>`;
   }).join("");
+}
+
+function renderStatusPanel(){
+  const el=qid("panel-status");if(!el||!gs)return;
+  const playersHTML=gs.players.map(p=>{
+    const gained=Math.floor(p.stats?.gained||0);
+    const lost=Math.floor(p.stats?.lost||0);
+    const cards=(p.stats?.cards||[]).slice(0,3);
+    const cardsHtml=cards.length
+      ?cards.map(c=>`<div>• ${sanitize(c,80)}</div>`).join("")
+      :"<div>• No cards drawn yet</div>";
+    return `<div class="status-row">
+      <div class="status-head">
+        <span class="status-name" style="color:${p.color}">${sanitize(p.name,24)}</span>
+        <span class="status-money"><span class="gain">+${CUR()}${gained.toLocaleString()}</span> · <span class="loss">-${CUR()}${lost.toLocaleString()}</span></span>
+      </div>
+      <div class="status-cards"><b>Cards</b>${cardsHtml}</div>
+    </div>`;
+  }).join("");
+  const feed=(gs.log||[]).slice(-20).reverse().map(line=>`<div class="status-feed-item">${sanitize(line,180)}</div>`).join("")||"<div class='status-feed-item'>No activity yet</div>";
+  el.innerHTML=`${playersHTML}<div class="status-feed-title">Latest Actions</div><div class="status-feed">${feed}</div>`;
 }
 
 /* ─── TRADE PANEL ───────────────────────────────────────── */
@@ -565,13 +652,13 @@ function renderTradeExpanded(){
     <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:.3rem;margin-bottom:.4rem">
       <div>
         <div style="font-size:.67rem;color:var(--muted);margin-bottom:.2rem">You give</div>
-        ${myP.map(s=>`<div class="trade-prop-row ${tFromSel.includes(s.pos)?"sel":""}" onclick="togTP('from',${s.pos})">${s.countryFlag||""}${s.name}</div>`).join("")||`<span style="font-size:.66rem;color:var(--muted)">—</span>`}
+        ${myP.map(s=>`<div class="trade-prop-row ${tFromSel.includes(s.pos)?"sel":""}" onclick="togTP('from',${s.pos})">${flagImg(s.countryCode,s.countryFlag,s.countryName,"flag-inline-sm")}${s.name}</div>`).join("")||`<span style="font-size:.66rem;color:var(--muted)">—</span>`}
         <input type="number" id="tf-m" value="0" min="0" max="${me.money}" step="50" class="inp" style="width:100%;font-size:.7rem;margin-top:.3rem;padding:.18rem .3rem">
       </div>
       <div style="align-self:center;font-size:.9rem">⇄</div>
       <div>
         <div style="font-size:.67rem;color:var(--muted);margin-bottom:.2rem">${to.name} gives</div>
-        ${thP.map(s=>`<div class="trade-prop-row ${tToSel.includes(s.pos)?"sel":""}" onclick="togTP('to',${s.pos})">${s.countryFlag||""}${s.name}</div>`).join("")||`<span style="font-size:.66rem;color:var(--muted)">—</span>`}
+        ${thP.map(s=>`<div class="trade-prop-row ${tToSel.includes(s.pos)?"sel":""}" onclick="togTP('to',${s.pos})">${flagImg(s.countryCode,s.countryFlag,s.countryName,"flag-inline-sm")}${s.name}</div>`).join("")||`<span style="font-size:.66rem;color:var(--muted)">—</span>`}
         <input type="number" id="tt-m" value="0" min="0" max="${to.money}" step="50" class="inp" style="width:100%;font-size:.7rem;margin-top:.3rem;padding:.18rem .3rem">
       </div>
     </div>
@@ -591,7 +678,7 @@ function showIncomingTrade({tradeId,fromId,toId,offer}){
   if(toId!==myId)return;
   incomingTrade={tradeId,fromId,offer};
   const from=gs?.players.find(p=>p.id===fromId);
-  const dp=pos=>gs?.board[pos]?`${gs.board[pos].countryFlag||""}${gs.board[pos].name}`:`#${pos}`;
+  const dp=pos=>gs?.board[pos]?`${flagImg(gs.board[pos].countryCode,gs.board[pos].countryFlag,gs.board[pos].countryName,"flag-inline-sm")}${gs.board[pos].name}`:`#${pos}`;
   qid("tin-c").innerHTML=`
     <h2>💱 Offer from <span style="color:${from?.color||"var(--accent)"}">${from?.name||"?"}</span></h2>
     <div style="display:flex;gap:.6rem;flex-wrap:wrap;margin:.7rem 0">
@@ -628,12 +715,12 @@ function openNegotiate(){
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:.6rem;margin-bottom:.5rem">
       <div>
         <div style="font-size:.72rem;font-weight:700;color:var(--accent);margin-bottom:.2rem">I'll give</div>
-        ${myP.map(s=>`<div class="trade-prop-row" id="neg-f-${s.pos}" onclick="this.classList.toggle('sel')">${s.countryFlag||""}${s.name}</div>`).join("")||"<span style='font-size:.68rem;color:var(--muted)'>None</span>"}
+        ${myP.map(s=>`<div class="trade-prop-row" id="neg-f-${s.pos}" onclick="this.classList.toggle('sel')">${flagImg(s.countryCode,s.countryFlag,s.countryName,"flag-inline-sm")}${s.name}</div>`).join("")||"<span style='font-size:.68rem;color:var(--muted)'>None</span>"}
         <input type="number" id="neg-fm" value="0" min="0" max="${me?.money||0}" step="50" class="inp" placeholder="$ you send" style="width:100%;margin-top:.3rem;font-size:.72rem">
       </div>
       <div>
         <div style="font-size:.72rem;font-weight:700;color:var(--orange);margin-bottom:.2rem">I want</div>
-        ${thP.map(s=>`<div class="trade-prop-row" id="neg-t-${s.pos}" onclick="this.classList.toggle('sel')">${s.countryFlag||""}${s.name}</div>`).join("")||"<span style='font-size:.68rem;color:var(--muted)'>None</span>"}
+        ${thP.map(s=>`<div class="trade-prop-row" id="neg-t-${s.pos}" onclick="this.classList.toggle('sel')">${flagImg(s.countryCode,s.countryFlag,s.countryName,"flag-inline-sm")}${s.name}</div>`).join("")||"<span style='font-size:.68rem;color:var(--muted)'>None</span>"}
         <input type="number" id="neg-tm" value="0" min="0" max="${from?.money||0}" step="50" class="inp" placeholder="$ you want" style="width:100%;margin-top:.3rem;font-size:.72rem">
       </div>
     </div>
@@ -658,7 +745,7 @@ function showNegotiateModal({tradeId,fromId,toId,offer,message}){
   if(toId!==myId)return;
   incomingTrade={tradeId,fromId,offer};
   const from=gs?.players.find(p=>p.id===fromId);
-  const dp=pos=>gs?.board[pos]?`${gs.board[pos].countryFlag||""}${gs.board[pos].name}`:`#${pos}`;
+  const dp=pos=>gs?.board[pos]?`${flagImg(gs.board[pos].countryCode,gs.board[pos].countryFlag,gs.board[pos].countryName,"flag-inline-sm")}${gs.board[pos].name}`:`#${pos}`;
   qid("tin-c").innerHTML=`
     <h2>🔄 Counter from <span style="color:${from?.color||"var(--accent)"}">${from?.name||"?"}</span></h2>
     ${message?`<div style="background:var(--bg);border-radius:6px;padding:.4rem;font-size:.76rem;margin-bottom:.5rem;font-style:italic">"${message}"</div>`:""}
@@ -875,9 +962,23 @@ function updateDiceOver(){
 
 function animDice(cb){
   const d1=qid("d1"),d2=qid("d2");
+  if(!d1||!d2){if(cb)cb();return;}
+  if(_diceRolling)return;
+  _diceRolling=true;
+  const over=qid("dice-over");
+  d1.classList.add("rolling");
+  d2.classList.add("rolling");
+  over?.classList.add("rolling");
   let n=0;const iv=setInterval(()=>{
     d1.textContent=DF[Math.floor(Math.random()*6)];d2.textContent=DF[Math.floor(Math.random()*6)];
-    if(++n>11){clearInterval(iv);if(cb)cb();}
+    if(++n>11){
+      clearInterval(iv);
+      d1.classList.remove("rolling");
+      d2.classList.remove("rolling");
+      over?.classList.remove("rolling");
+      _diceRolling=false;
+      if(cb)cb();
+    }
   },55);
 }
 
@@ -915,10 +1016,12 @@ function _renderActionsCore(){
   if(gs.phase==="auction"){
     const auc=gs.auction;
     if(auc&&!auc.folded?.includes(myId)){
-      h+=`<button class="btn btn-grn btn-sm" onclick="auctionBid(${auc.currentBid+10})">+${CUR()}10</button>`;
-      h+=`<button class="btn btn-grn btn-sm" onclick="auctionBid(${auc.currentBid+50})">+${CUR()}50</button>`;
-      h+=`<button class="btn btn-grn btn-sm" onclick="auctionBid(${auc.currentBid+100})">+${CUR()}100</button>`;
-      h+=`<input type="number" id="custom-bid" class="inp" style="width:72px;font-size:.72rem" value="${auc.currentBid+20}" min="${auc.currentBid+1}">`;
+      const mustWait=auc.lastBidder===myId;
+      if(mustWait)h+=`<div style="color:var(--muted);font-size:.72rem;padding:.2rem .35rem">Wait for another player to bid…</div>`;
+      h+=`<button class="btn btn-grn btn-sm" ${mustWait?"disabled":""} onclick="auctionBid(${auc.currentBid+2})">+${CUR()}2</button>`;
+      h+=`<button class="btn btn-grn btn-sm" ${mustWait?"disabled":""} onclick="auctionBid(${auc.currentBid+10})">+${CUR()}10</button>`;
+      h+=`<button class="btn btn-grn btn-sm" ${mustWait?"disabled":""} onclick="auctionBid(${auc.currentBid+100})">+${CUR()}100</button>`;
+      h+=`<input type="number" id="custom-bid" class="inp" style="width:72px;font-size:.72rem" value="${auc.currentBid+2}" min="${auc.currentBid+1}">`;
       h+=`<button class="btn btn-acc btn-sm" onclick="auctionCustomBid()">Bid</button>`;
       h+=`<button class="btn btn-red btn-sm" onclick="auctionFold()">🏳️ Fold</button>`;
     }else if(auc?.folded?.includes(myId)){h+=`<div style="color:var(--muted);font-size:.76rem">You folded</div>`;}
@@ -935,15 +1038,20 @@ function _renderActionsCore(){
     h+=`<button class="btn btn-acc" style="width:100%" onclick="ga('hazard_ack');cm('m-surp');cm('m-gov')">Continue →</button>`;
   if(gs.phase==="action"){
     h+=`<button class="btn btn-out" onclick="showBuildModal()">🏗️ Build</button>`;
-    h+=`<button class="btn btn-out" onclick="showMortModal()">🔒 Mortgage</button>`;
     const totalLoss=(me.pendingHazardLoss||0)+(me.pendingHazardRebuildCost||0);
     if(totalLoss>0&&me.hasInsurance)h+=`<button class="btn btn-grn btn-sm" onclick="ga('claim_insurance')">🛡️ Claim ${CUR()}${Math.floor(totalLoss*(gs.settings.insurancePayout/100))}</button>`;
-    h+=`<button class="btn btn-acc" onclick="ga('end_turn')">▶ End Turn</button>`;
+    if(me.money<0){
+      h+=`<div style="background:color-mix(in srgb,var(--red) 10%,transparent);border:1px solid var(--red);border-radius:7px;padding:.45rem;font-size:.73rem;text-align:center;color:var(--red)">Negative balance: sell, mortgage, trade, or go bankrupt.</div>`;
+      h+=`<button class="btn btn-acc" disabled style="opacity:.45;cursor:not-allowed">▶ End Turn</button>`;
+    }else{
+      h+=`<button class="btn btn-acc" onclick="ga('end_turn')">▶ End Turn</button>`;
+    }
     if(gs.treasurePot>0)h+=`<div class="pot">💰 Pot: ${CUR()}${gs.treasurePot}</div>`;
     // Bankrupt auction button for any owned property with houses
     const myHouseProps=gs.board.filter(s=>s.owner===myId&&(s.houses||0)>0);
     if(myHouseProps.length&&me.money<0)h+=`<button class="btn btn-out btn-sm" onclick="showBankruptAuctionModal()">🔨 Auction Property</button>`;
   }
+  if(gs.phase!=="auction")h+=`<button class="btn btn-red btn-sm" onclick="confirmDeclareBankrupt()">💀 Go Bankrupt</button>`;
   al.innerHTML=h;
 }
 
@@ -968,7 +1076,7 @@ function renderAuctionModal(){
     <div class="auc-header">
       <div style="display:flex;align-items:center;gap:.5rem">
         <div style="width:12px;height:12px;border-radius:50%;background:${gc};flex-shrink:0"></div>
-        <span style="font-size:.95rem;font-weight:700">🔨 ${sp?.countryFlag||ps.countryFlag||""}${sp?.name||ps.name||"Auction"}</span>
+        <span style="font-size:.95rem;font-weight:700">🔨 ${sp?flagImg(sp.countryCode,sp.countryFlag,sp.countryName,"flag-inline-sm"):(ps.countryFlag||"")}${sp?.name||ps.name||"Auction"}</span>
       </div>
       <div class="auc-ring-wrap">
         <svg class="auc-ring" viewBox="0 0 36 36">
@@ -981,8 +1089,9 @@ function renderAuctionModal(){
     <div class="auc-bid-center">
       <div class="auc-cur-bid">${CUR()}${auc.currentBid||0}</div>
       <div class="auc-cur-bidder" style="color:${iAmHigh?"var(--green)":"var(--muted)"}">
-        ${highBidder?`${iAmHigh?"🏆 You lead":"Leading:"} ${highBidder.name}`:"No bids yet — starting at "+CUR()+(auc.basePrice||0)}
+        ${highBidder?`${iAmHigh?"🏆 You lead":"Leading:"} ${highBidder.name}`:"No bids yet — starting at "+CUR()+"0"}
       </div>
+      ${auc.lastBidder===myId?`<div style="font-size:.7rem;color:var(--muted);margin-top:.2rem">You bid last. Waiting for another bidder…</div>`:""}
       <div style="font-size:.72rem;color:var(--muted);margin-top:.25rem">Your cash: ${CUR()}${me?.money||0} · Folded: ${auc.folded?.length||0}/${gs.players.filter(p=>!p.bankrupted).length}</div>
     </div>
     <div class="auc-prop-strip">
@@ -990,17 +1099,20 @@ function renderAuctionModal(){
       ${ps.rents?`<span>Base rent: <b>${CUR()}${ps.rents[0]||0}</b></span>`:""}
       ${ps.stateName?`<span>📍 ${ps.stateName}</span>`:""}
     </div>
+    ${(ps.type==="property"&&ps.rents)?`<table class="rtbl" style="margin-top:.25rem"><tr><th>Level</th><th>Rent</th></tr>${["Base","1🏠","2🏠","3🏠","4🏠","🏨"].map((lbl,i)=>`<tr><td>${lbl}</td><td>${CUR()}${ps.rents[i]||0}</td></tr>`).join("")}</table>`:""}
+    ${(ps.type==="airport")?`<table class="rtbl" style="margin-top:.25rem"><tr><th>Owned Airports</th><th>Fee</th></tr>${[1,2,3,4].map(n=>`<tr><td>${n}</td><td>${CUR()}${(gs.settings.airportFee||100)*n}</td></tr>`).join("")}</table>`:""}
+    ${(ps.type==="railway")?`<table class="rtbl" style="margin-top:.25rem"><tr><th>Owned Railways</th><th>Fee</th></tr>${[1,2,3,4].map(n=>`<tr><td>${n}</td><td>${CUR()}${25*Math.pow(2,n-1)}</td></tr>`).join("")}</table>`:""}
     <div class="auc-history">
       ${auc.bidHistory?.length?auc.bidHistory.slice(-6).reverse().map((b,i)=>`<div class="auc-hist-row${i===0?" auc-hist-latest":""}"><b>${b.playerName}</b> bid <b style="color:var(--accent)">${CUR()}${b.amount}</b></div>`).join(""):`<div style="font-size:.72rem;color:var(--muted);text-align:center">No bids yet — start bidding!</div>`}
     </div>
     ${!myFolded?`
     <div class="auc-bid-btns">
-      <button class="btn btn-grn" onclick="auctionBid(${auc.currentBid+10})">+${CUR()}10</button>
-      <button class="btn btn-grn" onclick="auctionBid(${auc.currentBid+50})">+${CUR()}50</button>
-      <button class="btn btn-grn" onclick="auctionBid(${auc.currentBid+100})">+${CUR()}100</button>
+      <button class="btn btn-grn" ${auc.lastBidder===myId?"disabled":""} onclick="auctionBid(${auc.currentBid+2})">+${CUR()}2</button>
+      <button class="btn btn-grn" ${auc.lastBidder===myId?"disabled":""} onclick="auctionBid(${auc.currentBid+10})">+${CUR()}10</button>
+      <button class="btn btn-grn" ${auc.lastBidder===myId?"disabled":""} onclick="auctionBid(${auc.currentBid+100})">+${CUR()}100</button>
     </div>
     <div style="display:flex;gap:.4rem;margin-top:.4rem">
-      <input type="number" id="auc-custom" class="inp" value="${auc.currentBid+20}" min="${auc.currentBid+1}" style="flex:1">
+      <input type="number" id="auc-custom" class="inp" value="${auc.currentBid+2}" min="${auc.currentBid+1}" style="flex:1">
       <button class="btn btn-acc" onclick="auctionCustomBid2()">Custom Bid</button>
       <button class="btn btn-red" onclick="auctionFold()">🏳️ Fold</button>
     </div>`:`<div class="auc-folded-msg">You folded — watching the auction</div>`}`;
@@ -1034,6 +1146,12 @@ function showBankruptAuctionModal(){
   const base=myHouseProps[0];if(!base)return;
   const pi=gs.players.findIndex(p=>p.id===myId);
   ga("bankrupt_auction",{position:base.pos});
+}
+
+function confirmDeclareBankrupt(){
+  const me=gs?.players?.find(p=>p.id===myId);
+  if(!me||me.bankrupted)return;
+  if(confirm("Declare bankruptcy and forfeit the game? This cannot be undone."))ga("declare_bankrupt");
 }
 
 /* ─── PENDING EVENTS ─────────────────────────────────────── */
@@ -1121,28 +1239,46 @@ function showPropModal(pos){
   const gi=sp.group?parseInt(sp.group.slice(1)):-1;
   const gc=gi>=0?GRP_COLORS[gi]:"#666";
   const hasSet=sp.group&&gs.board.filter(s=>s.group===sp.group&&s.type==="property").every(s=>s.owner===sp.owner);
+  const setBonusOn=gs.settings?.doubleRentOnSet!==false;
   let rH="";
   if(sp.type==="property"&&sp.rents){
     const lbls=["Base","1🏠","2🏠","3🏠","4🏠","🏨"];
-    rH=`<table class="rtbl"><tr><th>Level</th><th>Rent</th></tr>${sp.rents.map((r,i)=>`<tr class="${(sp.houses||0)===i?"rhl":""}"><td>${lbls[i]}</td><td>${CUR()}${hasSet&&i===0?`<b style="color:var(--accent)">${r*2}</b> <span style='color:var(--muted);font-size:.7em'>×2 SET</span>`:r}</td></tr>`).join("")}</table>`;
+    rH=`<table class="rtbl"><tr><th>Level</th><th>Rent</th></tr>${sp.rents.map((r,i)=>`<tr class="${(sp.houses||0)===i?"rhl":""}"><td>${lbls[i]}</td><td>${CUR()}${hasSet&&setBonusOn&&i===0?`<b style="color:var(--accent)">${r*2}</b> <span style='color:var(--muted);font-size:.7em'>×2 SET</span>`:r}</td></tr>`).join("")}</table>`;
   }
   if(sp.type==="airport")rH=`<table class="rtbl"><tr><th>Airports</th><th>Fee</th></tr>${[1,2,3,4].map(n=>`<tr><td>${n}</td><td>${CUR()}${gs.settings.airportFee*n}</td></tr>`).join("")}</table>`;
   if(sp.type==="railway")rH=`<table class="rtbl"><tr><th>Railways</th><th>Fee</th></tr>${[1,2,3,4].map(n=>`<tr><td>${n}</td><td>${CUR()}${25*Math.pow(2,n-1)}</td></tr>`).join("")}</table>`;
   const me=gs.players.find(p=>p.id===myId);
+  const isMyTurn=gs.players[gs.currentPlayerIdx]?.id===myId;
   const isBuyPhase=gs.phase==="buy"&&me?.position===pos&&gs.players[gs.currentPlayerIdx]?.id===myId;
   const cc=me?.creditCard;
   const canCreditBuy=isBuyPhase&&!own&&cc?.active&&(cc.limit-cc.used)>=(sp.price||0);
+  const modalFlag=flagImg(sp.countryCode,sp.countryFlag,sp.countryName,"flag-inline-md");
+  const canManageMortgage=own&&me&&own.id===myId&&isMyTurn;
+  const mortgagedAmount=Math.floor((sp.price||0)*0.75);
+  const unmortgageCost=mortgagedAmount+Math.ceil(mortgagedAmount*0.05);
+  const mortgageHTML=canManageMortgage
+    ?(sp.mortgaged
+      ?`<div style="margin-top:.55rem;padding:.5rem;border:1px solid var(--border);border-radius:8px;background:var(--bg)">
+          <div style="font-size:.72rem;color:var(--muted);margin-bottom:.3rem">Lift Mortgage = Mortgaged Amount + 5% fee</div>
+          <button class="btn btn-grn" style="width:100%" ${me.money<unmortgageCost?"disabled":""} onclick="ga('unmortgage',{position:${pos}});cm('m-prop')">🔓 Unmortgage ${CUR()}${unmortgageCost}</button>
+        </div>`
+      :`<div style="margin-top:.55rem;padding:.5rem;border:1px solid var(--border);border-radius:8px;background:var(--bg)">
+          ${sp.houses>0?`<div style="font-size:.72rem;color:var(--red);margin-bottom:.3rem">Sell all houses first to mortgage this property.</div>`:""}
+          <button class="btn btn-out" style="width:100%" ${sp.houses>0?"disabled":""} onclick="ga('mortgage',{position:${pos}});cm('m-prop')">🔒 Mortgage ${CUR()}${mortgagedAmount}</button>
+        </div>`)
+    :"";
   qid("prop-c").innerHTML=`
     <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem">
       <div style="width:14px;height:14px;border-radius:50%;background:${gc}"></div>
-      <h2 style="margin:0;font-size:.95rem">${sp.countryFlag||""}${sp.name}</h2>
-      ${hasSet?`<span style="font-size:.68rem;background:var(--accent);color:#000;padding:.12rem .4rem;border-radius:10px;font-weight:700">★ FULL SET 2×</span>`:""}
+      <h2 style="margin:0;font-size:.95rem">${modalFlag}${sp.name}</h2>
+      ${hasSet&&setBonusOn?`<span style="font-size:.68rem;background:var(--accent);color:#000;padding:.12rem .4rem;border-radius:10px;font-weight:700">★ FULL SET 2×</span>`:""}
     </div>
     ${sp.stateName?`<p style="color:var(--muted);font-size:.72rem;margin-bottom:.3rem">📍 ${sp.stateName} · ${sp.countryName||""}</p>`:""}
     ${own?`<p style="color:${own.color};font-size:.78rem;margin-bottom:.35rem">Owner: ${own.name}</p>`:`<p style="color:var(--muted);font-size:.76rem;margin-bottom:.35rem">Unowned</p>`}
     ${sp.mortgaged?`<p style="color:var(--red);font-size:.75rem">⚠️ Mortgaged</p>`:""}
     ${sp.price?`<p style="font-size:.82rem;margin-bottom:.35rem">Price: <b>${CUR()}${sp.price}</b>${sp.houseCost?` · House: <b>${CUR()}${sp.houseCost}</b>`:""}</p>`:""}
     ${rH}
+    ${mortgageHTML}
     ${canCreditBuy?`<div style="margin-top:.6rem;padding:.45rem;background:color-mix(in srgb,var(--purple) 10%,transparent);border:1px solid var(--purple);border-radius:8px">
       <div style="font-size:.72rem;color:var(--muted);margin-bottom:.3rem">💳 Credit available: ${CUR()}${cc.limit-cc.used}</div>
       <button class="btn btn-pur" style="width:100%" onclick="ga('buy',{useCredit:true});cm('m-prop')">💳 Buy on Credit</button>
@@ -1201,7 +1337,7 @@ function showBuildModal(){
         return`<div style="background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:.48rem .55rem">
           <div style="display:flex;align-items:center;gap:.38rem;margin-bottom:.28rem">
             <div style="width:9px;height:9px;border-radius:50%;background:${GRP_COLORS[gi]}"></div>
-            <strong style="font-size:.8rem">${s.countryFlag||""}${s.name}</strong>
+            <strong style="font-size:.8rem">${flagImg(s.countryCode,s.countryFlag,s.countryName,"flag-inline-sm")}${s.name}</strong>
             <span style="font-size:.68rem;color:var(--muted)">${h<5?h+"h":"🏨"}</span>
           </div>
           <div style="display:flex;gap:.28rem">
@@ -1223,10 +1359,10 @@ function showMortModal(){
         const gi=s.group?parseInt(s.group.slice(1)):-1;
         return`<div style="background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:.42rem .55rem;display:flex;align-items:center;gap:.38rem">
           ${gi>=0?`<div style="width:8px;height:8px;border-radius:50%;background:${GRP_COLORS[gi]}"></div>`:""}
-          <span style="flex:1;font-size:.78rem">${s.countryFlag||""}${s.name}</span>
+          <span style="flex:1;font-size:.78rem">${flagImg(s.countryCode,s.countryFlag,s.countryName,"flag-inline-sm")}${s.name}</span>
           ${s.mortgaged
-            ?`<span style="font-size:.7rem;color:var(--red)">Mortgaged</span><button class="btn btn-sm btn-grn" onclick="ga('unmortgage',{position:${s.pos}})">Unmortgage ${CUR()}${Math.floor(s.price*.55)}</button>`
-            :`<button class="btn btn-sm btn-out" onclick="ga('mortgage',{position:${s.pos}})">Mortgage ${CUR()}${Math.floor(s.price/2)}</button>`}
+            ?`<span style="font-size:.7rem;color:var(--red)">Mortgaged</span><button class="btn btn-sm btn-grn" onclick="ga('unmortgage',{position:${s.pos}})">Unmortgage ${CUR()}${Math.floor(s.price*.75)+Math.ceil(Math.floor(s.price*.75)*0.05)}</button>`
+            :`<button class="btn btn-sm btn-out" onclick="ga('mortgage',{position:${s.pos}})">Mortgage ${CUR()}${Math.floor(s.price*.75)}</button>`}
         </div>`;
       }).join("")}
     </div>
@@ -1278,7 +1414,16 @@ function renderLobby(){
   if(!lobbyData)return;
   const{players,settings}=lobbyData;
   const isHost=players.find(p=>p.id===myId)?.isHost;
+  _isLobbyHost=!!isHost;
   if(isHost&&qid("start-btn"))qid("start-btn").style.display=players.length>=1?"block":"none";
+  if(!isHost&&qid("start-btn"))qid("start-btn").style.display="none";
+  const rulesBtn=qid("rules-btn");
+  if(rulesBtn){
+    rulesBtn.disabled=!isHost;
+    rulesBtn.style.opacity=isHost?"1":".45";
+    rulesBtn.style.cursor=isHost?"pointer":"not-allowed";
+    rulesBtn.title=isHost?"Edit game rules":"Only host can change rules";
+  }
   qid("lobby-players").innerHTML=players.map(p=>{
     const avImg=drawAvatarSVG(p.avatar||{},38);
     return`<div style="display:flex;align-items:center;gap:.5rem;padding:.38rem;border-radius:7px;border:1px solid ${p.isHost?"var(--accent)":"var(--border)"}">
@@ -1296,21 +1441,23 @@ function renderLobby(){
 }
 
 function openSetup(){
+  if(!_isLobbyHost){toast("Only host can change rules.");return;}
   if(!lobbyData)return;
   const s=lobbyData.settings;
   function num(k,label,mi,mx,step=50){return`<div style="display:flex;align-items:center;justify-content:space-between;padding:.22rem 0;font-size:.8rem;gap:.4rem"><span>${label}</span><input type="number" value="${s[k]}" min="${mi}" max="${mx}" step="${step}" onchange="us('${k}',+this.value)" class="inp" style="width:75px;font-size:.75rem;padding:.25rem .4rem"></div>`;}
   function tgl(k,label){return`<div style="display:flex;align-items:center;justify-content:space-between;padding:.22rem 0;font-size:.8rem"><span>${label}</span><label class="toggle-sw sm"><input type="checkbox" ${s[k]?"checked":""} onchange="us('${k}',this.checked)"><span class="toggle-knob"></span></label></div>`;}
+  function jailRentTgl(){return`<div style="display:flex;align-items:center;justify-content:space-between;padding:.22rem 0;font-size:.8rem"><span>Collect Rent in Jail</span><label class="toggle-sw sm"><input type="checkbox" ${!s.noRentInJail?"checked":""} onchange="us('noRentInJail',!this.checked)"><span class="toggle-knob"></span></label></div>`;}
   const CURRENCIES=[["$","USD — Dollar"],["€","EUR — Euro"],["£","GBP — Pound"],["¥","JPY — Yen"],["₹","INR — Rupee"],["₩","KRW — Won"],["₽","RUB — Ruble"],["R$","BRL — Real"],["A$","AUD — Dollar"],["C$","CAD — Dollar"],["₺","TRY — Lira"],["₦","NGN — Naira"],["฿","THB — Baht"],["Rp","IDR — Rupiah"],["₱","PHP — Peso"]];
   function cur_sel(){return`<div style="display:flex;align-items:center;justify-content:space-between;padding:.22rem 0;font-size:.8rem;gap:.4rem"><span>Currency</span><select onchange="us('currency',this.value)" class="inp" style="font-size:.75rem;padding:.2rem .35rem;width:auto">${CURRENCIES.map(([sym,lbl])=>`<option value="${sym}" ${s.currency===sym?"selected":""}>${sym} ${lbl}</option>`).join("")}</select></div>`;}
   qid("setup-c").innerHTML=`
     <div class="stabs"><button class="stab on" onclick="stab('gen',this)">General</button><button class="stab" onclick="stab('tax',this)">Tax</button><button class="stab" onclick="stab('bank',this)">Bank</button></div>
-    <div id="st-gen" class="ssec on">${cur_sel()}${num("startingCash","Start Cash",500,5000)}${num("goSalary","GO Salary",50,1000,50)}${num("maxPlayers","Max Players",2,8,1)}${tgl("treasurePot","Treasure Pot")}${tgl("noRentInJail","No Rent in Jail")}${tgl("evenBuild","Even Build")}${tgl("mortgageEnabled","Mortgage System")}${tgl("auctionMode","Auction on Pass")}</div>
+    <div id="st-gen" class="ssec on">${cur_sel()}${num("startingCash","Start Cash",500,5000)}${num("goSalary","GO Salary",50,1000,50)}${num("maxPlayers","Max Players",2,8,1)}${tgl("treasurePot","Treasure")}${jailRentTgl()}${tgl("doubleRentOnSet","2× Rent on Full Set")}${tgl("evenBuild","Even Build")}${tgl("mortgageEnabled","Mortgage System")}${tgl("auctionMode","Auction on Pass")}</div>
     <div id="st-tax" class="ssec">${num("incomeTaxRate","Income Tax %",0,50,1)}${num("propertyTaxRate","Property Tax %",0,20,1)}${num("gainsTaxRate","Gains Tax %",0,50,1)}${num("randomTaxMultiplier","Random Tax ×",1,50,1)}${num("taxReturnRate","Tax Return %",0,100,5)}</div>
     <div id="st-bank" class="ssec">${num("depositRate","Deposit Rate %",0,20,1)}${num("loanRate","Loan Rate %",0,30,1)}${num("creditCardFee","CC Fee",0,200,10)}${num("creditCardLimit","CC Limit",100,2000,100)}${num("insurancePremium","Insurance Premium",0,200,10)}${num("insurancePayout","Insurance Payout %",0,100,5)}</div>`;
   om("m-setup");
 }
 function stab(id,btn){document.querySelectorAll(".stab").forEach(b=>b.classList.remove("on"));document.querySelectorAll(".ssec").forEach(s=>s.classList.remove("on"));btn.classList.add("on");qid("st-"+id).classList.add("on");}
-function us(k,v){socket.emit("update_settings",{settings:{[k]:v}});}
+function us(k,v){if(!_isLobbyHost){toast("Only host can change rules.");return;}socket.emit("update_settings",{settings:{[k]:v}});}
 
 /* ─── BOARD SELECT ───────────────────────────────────────── */
 let _wwCountries=[];
@@ -1344,7 +1491,14 @@ function generateSeed(){
 function rerollSeed(){generateSeed();}
 function updateBoardPreview(){
   const t=4*(curSize+1);
-  const labels={standard:"🌍 Standard World",worldwide:"🗺️ Worldwide Custom",random:"🎲 Random",india:"🇮🇳 India",uk:"🇬🇧 UK",usa:"🇺🇸 USA"};
+  const labels={
+    standard:"🌍 Standard World",
+    worldwide:"🗺️ Worldwide Custom",
+    random:"🎲 Random",
+    india:`${flagImg("in","🇮🇳","India","flag-inline-sm")}India`,
+    uk:`${flagImg("gb","🇬🇧","United Kingdom","flag-inline-sm")}UK`,
+    usa:`${flagImg("us","🇺🇸","United States","flag-inline-sm")}USA`
+  };
   if(qid("board-preview"))qid("board-preview").innerHTML=`<span>${labels[curBoardType]||""}<br>${t} tiles</span>`;
   if(qid("board-info"))qid("board-info").textContent=`${t} tiles · 4 airports · 4 railways`;
 }
@@ -1355,7 +1509,7 @@ async function renderWorldwidePanel(){
   el.innerHTML=_wwCountries.map(c=>`
     <div class="country-row">
       <div class="country-hdr" onclick="toggleWWCountry('${c.code}')">
-        <span class="country-flag">${c.flag}</span>
+        <span class="country-flag">${flagImg(c.code,c.flag,c.name,"country-flag-img")}</span>
         <span class="country-name">${c.name}</span>
         <span class="country-tier">Tier ${c.tier}</span>
         <span class="country-arrow" id="warr-${c.code}">▶</span>
@@ -1575,7 +1729,7 @@ function editorRenderCountryPool(){
     }).join("");
     return`<div class="ed-country-row${onBoard?" on-board":""}" data-name="${c.name}" data-cities="${c.cities.join(",")}" id="ecp-${c.code}">
       <div class="ed-country-hdr" onclick="editorToggleCountry('${c.code}')">
-        <span class="ed-country-flag">${c.flag}</span>
+        <span class="ed-country-flag">${flagImg(c.code,c.flag,c.name,"ed-country-flag-img")}</span>
         <div class="ed-country-info">
           <div class="ed-country-name">${c.name}</div>
           <div class="ed-country-meta">Tier ${c.tier} · ${CUR()}${c.base}–${CUR()}${c.base+(c.cities.length-1)*10} · ${addedCities.size}/${c.cities.length} cities</div>
@@ -1632,7 +1786,7 @@ function editorToggleCity(code,cityIndex){
     const slot=slots[0];
     editorBoard.push({pos:slot,type:"property",group:`g${Math.floor(slot/(editorSize+1))%8}`,
       name:city,countryCode:c.code,countryFlag:c.flag,countryName:c.name,
-      price,rents:[Math.floor(price*.04),Math.floor(price*.2),Math.floor(price*.6),Math.floor(price*1.4),Math.floor(price*1.7),Math.floor(price*2)],
+      price,rents:calcTieredRents(price),
       houseCost:Math.max(50,Math.floor(price*.5)),houses:0,owner:null,mortgaged:false});
     toast(`➕ Added ${city} — ${CUR()}${price}`);
   }
@@ -1654,7 +1808,7 @@ function editorAddAllCities(code){
     editorBoard=editorBoard.filter(s=>s.pos!==slots[i]);
     editorBoard.push({pos:slots[i],type:"property",group:`g${Math.floor(slots[i]/(editorSize+1))%8}`,
       name:city,countryCode:c.code,countryFlag:c.flag,countryName:c.name,
-      price,rents:[Math.floor(price*.04),Math.floor(price*.2),Math.floor(price*.6),Math.floor(price*1.4),Math.floor(price*1.7),Math.floor(price*2)],
+      price,rents:calcTieredRents(price),
       houseCost:Math.max(50,Math.floor(price*.5)),houses:0,owner:null,mortgaged:false});
   });
   toast(`➕ Added ${toAdd.length} cities from ${c.name}`);
@@ -1689,7 +1843,7 @@ function editorRenderBoard(){
   el.style.cssText=`grid-template-columns:70px repeat(${S},40px) 70px;grid-template-rows:70px repeat(${S},40px) 70px`;
   el.innerHTML="";
   const board=buildEditorFullBoard(S);
-  const ICONS={airport:"✈️",railway:"🚂",gov_prot:"🏛️",chest:"📦",chance:"❓",income_tax:"💰",property_tax:"🏠",gains_tax:"📈",luxury_tax:"💸",tax_return:"📋",empty:"·"};
+  const ICONS={airport:"✈️",railway:"🚂",gov_prot:"🏛️",chest:"📦",chance:"❓",income_tax:"💰",property_tax:"🏠",gains_tax:"📈",luxury_tax:"💸",tax_return:"$",empty:"·"};
 
   board.forEach((sp,pos)=>{
     const{col,row}=gridPos(pos,S);
@@ -1702,12 +1856,14 @@ function editorRenderBoard(){
     div.onclick=()=>showEditorPropPopup(sp,pos);
 
     if(isCorner){
-      const labels={0:"🚀\nSTART",[C]:"⛓️\nJAIL",[C*2]:"🅿️\nFREE",[C*3]:"👮\nGO\nJAIL"};
+      const labels={0:"🚀\nSTART",[C]:"⛓️\nJAIL",[C*2]:"💰\nTREASURE",[C*3]:"👮\nGO\nJAIL"};
       div.innerHTML=`<div class="ed-corner-in">${labels[pos]||""}</div>`;
     }else{
       const gi=sp.group?parseInt(sp.group.slice(1)):-1;
       const gc=gi>=0?GRP_COLORS[gi]:null;
-      const icon=ICONS[sp.type]||(sp.countryFlag||"🏙️");
+      let icon=ICONS[sp.type]||"";
+      if(!icon&&sp.countryCode)icon=flagImg(sp.countryCode,sp.countryFlag,sp.countryName||sp.name,"ed-flag-img");
+      if(!icon)icon=sp.countryFlag||"🏙️";
       if(gc)div.style.setProperty("--ed-grp-color",gc);
       const nameText=sp.type==="empty"?"":sp.name||"";
       div.innerHTML=`<div class="ed-tile-inner"><span class="ed-flag">${icon}</span>${nameText?`<span class="ed-nm">${nameText}</span>`:""}${sp.price?`<span class="ed-price">${CUR()}${sp.price}</span>`:""}</div>`;
@@ -1784,7 +1940,7 @@ function editorPoolDropOnBoard(countryCode,cityIndex,targetPos){
   editorBoard.push({pos:targetPos,type:"property",
     group:`g${Math.floor(targetPos/C)%8}`,
     name:city,countryCode:c.code,countryFlag:c.flag,countryName:c.name,
-    price,rents:[Math.floor(price*.04),Math.floor(price*.2),Math.floor(price*.6),Math.floor(price*1.4),Math.floor(price*1.7),Math.floor(price*2)],
+    price,rents:calcTieredRents(price),
     houseCost:Math.max(50,Math.floor(price*.5)),houses:0,owner:null,mortgaged:false});
   toast(`📍 ${c.flag} ${city} → slot #${targetPos}`);
   editorRenderCountryPool();
@@ -1797,7 +1953,7 @@ function buildEditorFullBoard(S){
   // Corners
   specials[0]={pos:0,type:"go",name:"START"};
   specials[C]={pos:C,type:"jail",name:"Jail"};
-  specials[2*C]={pos:2*C,type:"free_parking",name:"Free"};
+  specials[2*C]={pos:2*C,type:"free_parking",name:"Treasure"};
   specials[3*C]={pos:3*C,type:"go_to_jail",name:"Go Jail"};
   // Airports — exact centre of each side
   const half=Math.round(S/2);
@@ -1814,7 +1970,7 @@ function buildEditorFullBoard(S){
   specials[rw.E]={pos:rw.E,type:"railway",name:"🚂 E Rail",price:150};
   // Tax Refund — between east railway and east airport
   const taxRet=ap.E-1;
-  specials[taxRet]={pos:taxRet,type:"tax_return",name:"📋 Tax Refund"};
+  specials[taxRet]={pos:taxRet,type:"tax_return",name:"$ Tax Refund"};
   // Other specials
   specials[1]={pos:1,type:"income_tax",name:"💰 Tax"};
   specials[2*C-1]={pos:2*C-1,type:"luxury_tax",name:"💸 Luxury"};
@@ -1868,7 +2024,7 @@ function showEditorPropPopup(sp,pos){
   qid("editor-popup-content").innerHTML=`
     <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem">
       ${gi>=0?`<div style="width:12px;height:12px;border-radius:50%;background:${gc}"></div>`:""}
-      <h3 style="margin:0;font-size:.95rem">${sp.countryFlag||""}${sp.name}</h3>
+      <h3 style="margin:0;font-size:.95rem">${flagImg(sp.countryCode,sp.countryFlag,sp.countryName,"flag-inline-sm")}${sp.name}</h3>
     </div>
     ${(sp.type==="property"||sp.type==="airport"||sp.type==="railway")?`
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:.4rem;margin-bottom:.5rem">

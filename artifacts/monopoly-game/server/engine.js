@@ -34,6 +34,7 @@ const BAD_SURP = [
   {icon:"🐕",text:"Dog vet emergency: pay $110.",action:"pay",amount:110},
   {icon:"🎮",text:"Kid bought in-game currency. Pay $50.",action:"pay",amount:50},
   {icon:"🛑",text:"Ran red light. Camera caught it. Pay $65.",action:"pay",amount:65},
+  {icon:"↩️",text:"Oops! Move back 3 spaces.",action:"back3"},
 ];
 const GOOD_SURP = [
   {icon:"💎",text:"Found secret jewellery stash. Sold for $500!",action:"gain",amount:500},
@@ -48,6 +49,8 @@ const GOOD_SURP = [
   {icon:"🎨",text:"Painting sold for a lot. Collect $180!",action:"gain",amount:180},
   {icon:"🔑",text:"Old property bond matured! Collect $250!",action:"gain",amount:250},
   {icon:"🌈",text:"Insurance claim approved. Collect $220!",action:"gain",amount:220},
+  {icon:"↪️",text:"Lucky jump! Move forward 3 spaces.",action:"fwd3"},
+  {icon:"🧭",text:"Mystery route! Move to a random tile.",action:"random_tile"},
 ];
 const CHEST_CARDS = [
   {text:"Advance to GO. Collect start salary.",action:"goto",position:0},
@@ -175,6 +178,7 @@ export function defaultSettings() {
     insurancePremium:50, insurancePayout:75,
     govGrantAmount:200, govBailoutAmount:200,
     evenBuild:true, mortgageEnabled:true, auctionMode:false,
+    doubleRentOnSet:true,
     noRentInJail:true, treasurePot:true,
     housingRule:"monopoly", maxPlayers:6, privateRoom:false,
     enableVeryBadSurprises:true, enableVeryGoodSurprises:true,
@@ -256,8 +260,10 @@ function mkGamePlayer(p, s) {
     jailCards: 0, govProtCards: 0, bankrupted: false, disconnected: false,
     bankDeposit: 0, bankDepositInterest: 0, loans: [], creditCard: null,
     hasInsurance: false,
+    vacationTurns: 0,
     pendingHazardLoss: 0, pendingHazardHouses: 0, pendingHazardRebuildCost: 0,
     totalEarned: s.startingCash,
+    stats: { gained: 0, lost: 0, cards: [] },
   };
 }
 
@@ -267,6 +273,7 @@ function mkGamePlayer(p, s) {
 export function processAction(gs, pi, action, data) {
   const p = gs.players[pi];
   if (p.bankrupted && action !== "end_turn") { nextTurn(gs); return gs; }
+  const beforeMoney = gs.players.map(pl => pl.money || 0);
   switch (action) {
     case "roll":            doRoll(gs, pi); break;
     case "buy":             doBuy(gs, pi); break;
@@ -299,8 +306,31 @@ export function processAction(gs, pi, action, data) {
     case "auction_fold":    doAuctionFold(gs, pi); break;
     case "auction_end":     doAuctionEnd(gs); break;
     case "bankrupt_auction":doStartBankruptAuction(gs, pi, data); break;
+    case "declare_bankrupt":doDeclareBankrupt(gs, pi); break;
   }
+  trackMoneyFlow(gs, beforeMoney);
   return gs;
+}
+
+function trackMoneyFlow(gs, beforeMoney) {
+  for (let i = 0; i < gs.players.length; i++) {
+    const pl = gs.players[i];
+    const prev = beforeMoney[i] || 0;
+    const cur = pl.money || 0;
+    const delta = cur - prev;
+    if (!pl.stats) pl.stats = { gained: 0, lost: 0, cards: [] };
+    if (delta > 0) pl.stats.gained += delta;
+    else if (delta < 0) pl.stats.lost += Math.abs(delta);
+  }
+}
+
+function recordCardDraw(p, text) {
+  if (!p) return;
+  if (!p.stats) p.stats = { gained: 0, lost: 0, cards: [] };
+  const line = String(text || "").trim();
+  if (!line) return;
+  p.stats.cards.unshift(line);
+  if (p.stats.cards.length > 8) p.stats.cards = p.stats.cards.slice(0, 8);
 }
 
 // ════════════════════════════════════════════════
@@ -370,7 +400,7 @@ function accrueInterest(gs, idx) {
 
 function enforceBadDebt(gs, idx, loan) {
   const p = gs.players[idx];
-  Object.assign(p, {badDebt:true,badDebtTurns:0,inJail:true,position:10,jailTurns:0});
+  Object.assign(p, {badDebt:true,badDebtTurns:0,inJail:true,position:(gs.tilesPerSide + 1),jailTurns:0});
   gs.log.push(`🔴 ${p.name} → BAD-DEBT JAIL.`);
   seizeCollateral(gs, idx, loan.remaining);
   p.loans = p.loans.filter(l => l !== loan);
@@ -378,7 +408,7 @@ function enforceBadDebt(gs, idx, loan) {
 
 function enforceCreditDebt(gs, idx) {
   const p = gs.players[idx];
-  Object.assign(p, {badDebt:true,badDebtTurns:0,inJail:true,position:10,jailTurns:0,creditCard:null});
+  Object.assign(p, {badDebt:true,badDebtTurns:0,inJail:true,position:(gs.tilesPerSide + 1),jailTurns:0,creditCard:null});
   gs.log.push(`🔴 ${p.name} defaulted on credit card.`);
   seizeCollateral(gs, idx, 500);
 }
@@ -395,7 +425,7 @@ function seizeCollateral(gs, idx, amount) {
   for (const pos of [...p.properties]) {
     const sp = gs.board[pos];
     if (seized >= amount || sp.mortgaged) continue;
-    sp.mortgaged = true; seized += Math.floor((sp.price || 0) / 2);
+    sp.mortgaged = true; seized += Math.floor((sp.price || 0) * 0.75);
   }
 }
 
@@ -407,6 +437,10 @@ function movePlayer(gs, idx, steps) {
   p.position = (p.position + steps) % gs.board.length;
   if (p.position < prev && steps > 0) {
     earnMoney(gs, idx, gs.settings.goSalary, "GO salary");
+    if (gs.treasurePot !== null && gs.treasurePot !== undefined) {
+      gs.treasurePot = (gs.treasurePot || 0) + 50;
+      gs.log.push(`💰 ${gs.settings.currency}50 added to Treasure (passed GO).`);
+    }
     if (p.hasInsurance) p.money -= gs.settings.insurancePremium;
     const cc = p.creditCard;
     if (cc && cc.active && (cc.used || 0) > 0) {
@@ -429,6 +463,10 @@ function landOn(gs, idx) {
   else if (t === "free_parking") {
     const pot = gs.treasurePot;
     if (pot) { earnMoney(gs, idx, pot, "Treasure Pot"); gs.treasurePot = 0; }
+    if (gs.settings.treasurePot) {
+      p.vacationTurns = Math.max(p.vacationTurns || 0, 1);
+      gs.log.push(`🏖️ ${p.name} starts vacation and will miss next turn.`);
+    }
     gs.phase = "action";
   }
   else if (t === "go_to_jail")     { sendJail(gs, idx); gs.phase = "action"; }
@@ -468,8 +506,16 @@ function landOn(gs, idx) {
 function payRentCheck(gs, idx, sp) {
   const p = gs.players[idx];
   const own = gs.players.find(q => q.id === sp.owner);
-  if (!own || own.id === p.id || own.bankrupted || sp.mortgaged ||
-      (gs.settings.noRentInJail && own.inJail)) { gs.phase = "action"; return; }
+  if (!own || own.id === p.id || own.bankrupted || sp.mortgaged) { gs.phase = "action"; return; }
+  if (gs.settings.noRentInJail && own.inJail) {
+    const blockedRent = calcRent(gs, sp);
+    if (gs.treasurePot !== null && gs.treasurePot !== undefined) {
+      gs.treasurePot = (gs.treasurePot || 0) + blockedRent;
+      gs.log.push(`💰 ${gs.settings.currency}${blockedRent} added to Treasure (owner in jail).`);
+    }
+    gs.phase = "action";
+    return;
+  }
   const rent = calcRent(gs, sp);
   chargeMoney(gs, idx, rent, `rent to ${own.name}`); own.money += rent;
   gs.phase = "action";
@@ -507,7 +553,11 @@ function calcRent(gs, sp) {
   }
   const h = sp.houses || 0; const rents = sp.rents || [0,0,0,0,0,0];
   let r = rents[Math.min(h, rents.length - 1)];
-  if (h === 0 && hasFullSet(gs, sp)) r *= 2;
+  if (h === 0 && hasFullSet(gs, sp) && gs.settings.doubleRentOnSet !== false) r *= 2;
+  if (h === 5 && sp.type === "property") {
+    const maxPrice = Math.max(...gs.board.filter(x => x.type === "property").map(x => x.price || 0), 0);
+    if ((sp.price || 0) >= maxPrice) r = 2000;
+  }
   return r;
 }
 
@@ -598,6 +648,7 @@ function drawSurprise(gs, idx) {
   else if (roll <= 49) { card = pick(BAD_SURP); tier = "bad"; }
   else { card = pick(GOOD_SURP); tier = "good"; }
   gs.chanceIdx++;
+  recordCardDraw(gs.players[idx], card.text || card.title || "Surprise Card");
   gs.pendingEvent = {type:"surprise",card,tier,isSpecialCard:true};
   gs.log.push(`🃏 Surprise (${tier}): ${card.text || card.title || ""}`);
   applyCard(gs, idx, card, true);
@@ -605,13 +656,27 @@ function drawSurprise(gs, idx) {
 
 function drawChest(gs, idx) {
   const deck = gs.chestDeck; const c = deck[gs.chestIdx % deck.length]; gs.chestIdx++;
+  recordCardDraw(gs.players[idx], c.text || "Community Chest");
   gs.log.push(`📦 Chest: ${c.text}`); applyCard(gs, idx, c, false);
 }
 
 function applyCard(gs, idx, card, surprise) {
   const p = gs.players[idx]; const a = card.action;
-  if      (a === "gain")          earnMoney(gs, idx, card.amount, "card");
-  else if (a === "pay")           chargeMoney(gs, idx, card.amount, "card penalty");
+  if      (a === "gain") {
+    earnMoney(gs, idx, card.amount, "card");
+    if (surprise && gs.treasurePot !== null && gs.treasurePot !== undefined) {
+      const potAdd = Math.max(1, Math.floor((card.amount || 0) * 0.1));
+      gs.treasurePot = (gs.treasurePot || 0) + potAdd;
+      gs.log.push(`💰 ${gs.settings.currency}${potAdd} added to Treasure (surprise gain).`);
+    }
+  }
+  else if (a === "pay") {
+    chargeMoney(gs, idx, card.amount, "card penalty");
+    if (surprise && gs.treasurePot !== null && gs.treasurePot !== undefined) {
+      gs.treasurePot = (gs.treasurePot || 0) + (card.amount || 0);
+      gs.log.push(`💰 ${gs.settings.currency}${card.amount || 0} added to Treasure (surprise payment).`);
+    }
+  }
   else if (a === "goto") {
     p.position = card.position;
     if (card.position === 0) earnMoney(gs, idx, gs.settings.goSalary, "GO");
@@ -656,6 +721,11 @@ function doBuy(gs, idx) {
 
 function doEndTurn(gs, idx) {
   const p = gs.players[idx]; const last = gs.lastRoll || [];
+  if (p.money < 0) {
+    gs.log.push(`⚠️ ${p.name} cannot end turn with negative balance.`);
+    gs.phase = "action";
+    return;
+  }
   if (last.length === 2 && last[0] === last[1] && !p.inJail && !p.badDebt) {
     gs.phase = "roll"; gs.log.push(`${p.name} rolled doubles — roll again!`);
   } else nextTurn(gs);
@@ -694,7 +764,7 @@ function doMortgage(gs, idx, data) {
   if (pos == null || pos >= gs.board.length) return;
   const sp = gs.board[pos];
   if (!sp || sp.owner !== p.id || sp.mortgaged || (sp.houses||0) > 0) return;
-  sp.mortgaged = true; earnMoney(gs, idx, Math.floor(sp.price / 2), "mortgage");
+  sp.mortgaged = true; earnMoney(gs, idx, Math.floor(sp.price * 0.75), "mortgage");
   gs.log.push(`${p.name} mortgaged ${sp.name}`);
 }
 
@@ -703,21 +773,26 @@ function doUnmortgage(gs, idx, data) {
   if (pos == null || pos >= gs.board.length) return;
   const sp = gs.board[pos];
   if (!sp || sp.owner !== p.id || !sp.mortgaged) return;
-  const cost = Math.floor(sp.price * 0.55);
+  const mortgagedAmount = Math.floor(sp.price * 0.75);
+  const fee = Math.ceil(mortgagedAmount * 0.05);
+  const cost = mortgagedAmount + fee;
   if (p.money < cost) return;
   sp.mortgaged = false; p.money -= cost;
+  gs.log.push(`${p.name} unmortgaged ${sp.name} for ${gs.settings.currency}${cost}`);
 }
 
 function doPayJail(gs, idx) {
   const p = gs.players[idx];
   if (!p.inJail || p.badDebt) return;
   chargeMoney(gs, idx, 50, "jail fine"); p.inJail = false; p.jailTurns = 0; gs.phase = "roll";
+  gs.log.push(`${p.name} paid jail fine and is free.`);
 }
 
 function doUseJailCard(gs, idx) {
   const p = gs.players[idx];
   if (!p.inJail || p.jailCards < 1 || p.badDebt) return;
   p.jailCards--; p.inJail = false; p.jailTurns = 0; gs.phase = "roll";
+  gs.log.push(`${p.name} used a Get Out of Jail card.`);
 }
 
 function doUseGovProt(gs, idx) {
@@ -795,6 +870,7 @@ function doBankRepay(gs, idx, data) {
   if (amt <= 0) return;
   loan.remaining -= amt; p.money -= amt;
   if (loan.remaining <= 0) p.loans = p.loans.filter(l => l !== loan);
+  gs.log.push(`🏦 ${p.name} repaid ${gs.settings.currency}${amt} loan.`);
 }
 
 function doBankCredit(gs, idx, data) {
@@ -806,6 +882,7 @@ function doBankCredit(gs, idx, data) {
   const ten = Math.max(data.tenure || 6, 3);
   p.money -= fee;
   p.creditCard = {active:true,used:0,limit,emi:Math.ceil(limit/ten),tenure:ten,paidTurns:0,roundsLeft:gs.settings.creditCardRounds||2};
+  gs.log.push(`💳 ${p.name} activated credit card (limit ${gs.settings.currency}${limit}).`);
 }
 
 function doBankPayEmi(gs, idx) {
@@ -813,6 +890,7 @@ function doBankPayEmi(gs, idx) {
   if (!cc || !cc.active || (cc.used||0) <= 0) return;
   const emi = Math.min(cc.emi, cc.used||0, p.money); p.money -= emi; cc.used -= emi;
   if (cc.used <= 0) p.creditCard = null;
+  gs.log.push(`💳 ${p.name} paid EMI ${gs.settings.currency}${emi}.`);
 }
 
 function doBankInsurance(gs, idx) {
@@ -831,45 +909,88 @@ function doClaimInsurance(gs, idx) {
   p.pendingHazardLoss = 0; p.pendingHazardRebuildCost = 0;
 }
 
+function doDeclareBankrupt(gs, idx) {
+  const p = gs.players[idx];
+  if (p.bankrupted) return;
+  const changed = forceBankrupt(gs, idx, `💀 ${p.name} declared bankruptcy.`);
+  if (!changed) return;
+  if (!gs.winner) nextTurn(gs);
+}
+
 // ════════════════════════════════════════════════
 //  HELPERS
 // ════════════════════════════════════════════════
 function earnMoney(gs, idx, amount, _label) {
+  if (!amount || amount <= 0) return;
   const p = gs.players[idx]; p.money += amount; p.totalEarned = (p.totalEarned||0) + amount;
+  if (_label) gs.log.push(`💵 ${p.name} gained ${gs.settings.currency}${amount} (${_label}).`);
 }
 
 function chargeMoney(gs, idx, amount, _label) {
+  if (!amount || amount <= 0) return;
   const p = gs.players[idx]; const cc = p.creditCard;
   const ccRoom = (cc && cc.active) ? (cc.limit - (cc.used||0)) : 0;
   if (p.money >= amount) p.money -= amount;
   else if (p.money + ccRoom >= amount) { const fc = amount - p.money; cc.used = (cc.used||0) + fc; p.money = 0; }
   else p.money -= amount;
+  if (_label) gs.log.push(`💸 ${p.name} paid ${gs.settings.currency}${amount} (${_label}).`);
   chkBankrupt(gs, idx);
 }
 
 function sendJail(gs, idx) {
-  const p = gs.players[idx]; Object.assign(p, {position:10,inJail:true,jailTurns:0}); gs.doublesCount = 0;
+  const p = gs.players[idx]; Object.assign(p, {position:(gs.tilesPerSide + 1),inJail:true,jailTurns:0}); gs.doublesCount = 0;
+  if (gs.treasurePot !== null && gs.treasurePot !== undefined) {
+    gs.treasurePot = (gs.treasurePot || 0) + 50;
+    gs.log.push(`💰 ${gs.settings.currency}50 added to Treasure (sent to jail).`);
+  }
   gs.log.push(`⛓️ ${p.name} sent to jail!`);
 }
 
 function chkBankrupt(gs, idx) {
+  return;
+}
+
+function forceBankrupt(gs, idx, logMessage) {
   const p = gs.players[idx];
-  if (p.money >= 0) return;
-  const totalDebt = p.loans.reduce((a,l) => a+l.remaining, 0) + ((p.creditCard||{}).used||0);
-  if (p.money + (p.bankDeposit||0) + (p.bankDepositInterest||0) > -totalDebt) return;
+  if (!p || p.bankrupted) return false;
   p.bankrupted = true;
   for (const sp of gs.board) {
     if (sp.owner === p.id) Object.assign(sp, {owner:null,houses:0,mortgaged:false});
   }
   p.properties = [];
-  gs.log.push(`💀 ${p.name} went bankrupt!`);
+  p.bankDeposit = 0;
+  p.bankDepositInterest = 0;
+  p.loans = [];
+  p.creditCard = null;
+  p.hasInsurance = false;
+  p.pendingHazardLoss = 0;
+  p.pendingHazardHouses = 0;
+  p.pendingHazardRebuildCost = 0;
+  gs.log.push(logMessage);
   const alive = gs.players.filter(q => !q.bankrupted);
   if (alive.length === 1) gs.winner = alive[0].id;
+  return true;
 }
 
 export function nextTurn(gs) {
-  let n = (gs.currentPlayerIdx + 1) % gs.players.length; let loops = 0;
-  while (gs.players[n].bankrupted && loops < gs.players.length) { n = (n+1) % gs.players.length; loops++; }
+  let n = (gs.currentPlayerIdx + 1) % gs.players.length;
+  let loops = 0;
+  while (loops < gs.players.length * 2) {
+    const np = gs.players[n];
+    if (np.bankrupted) {
+      n = (n + 1) % gs.players.length;
+      loops++;
+      continue;
+    }
+    if ((np.vacationTurns || 0) > 0) {
+      np.vacationTurns--;
+      gs.log.push(`🏖️ ${np.name} is on vacation and misses this turn.`);
+      n = (n + 1) % gs.players.length;
+      loops++;
+      continue;
+    }
+    break;
+  }
   Object.assign(gs, {currentPlayerIdx:n, phase:"roll", doublesCount:0});
   gs.turnInRound++;
   const alive = gs.players.filter(p => !p.bankrupted);
@@ -903,7 +1024,34 @@ export function execTrade(gs, fi, ti, offer) {
 //  BOARD GENERATION
 // ════════════════════════════════════════════════
 function buildRents(price) {
-  return [0.04, 0.20, 0.60, 1.40, 1.70, 2.00].map(x => Math.floor(price * x));
+  const p = Math.max(0, Number(price) || 0);
+  const bands = [
+    {max:80, lo:6, hi:10},
+    {max:140, lo:10, hi:20},
+    {max:200, lo:20, hi:35},
+    {max:260, lo:35, hi:55},
+    {max:330, lo:55, hi:80},
+    {max:Infinity, lo:80, hi:120},
+  ];
+  let minP = 0;
+  let base = 10;
+  for (const b of bands) {
+    if (p <= b.max) {
+      const span = Number.isFinite(b.max) ? Math.max(1, b.max - minP) : Math.max(1, p - minP);
+      const t = Number.isFinite(b.max) ? Math.max(0, Math.min(1, (p - minP) / span)) : 1;
+      base = Math.round(b.lo + (b.hi - b.lo) * t);
+      break;
+    }
+    minP = b.max + 1;
+  }
+  return [
+    base,
+    Math.round(base * 4),
+    Math.round(base * 10),
+    Math.round(base * 22),
+    Math.round(base * 36),
+    Math.round(base * 50),
+  ];
 }
 
 export function generateDefaultBoard(S) {
@@ -915,14 +1063,29 @@ export function generateDefaultBoard(S) {
   const rw = {S: ap.S - 2, W: ap.W - 2, N: ap.N - 2, E: ap.E - 2};
   // Tax Refund tile: between east railway and east airport (ap.E - 1)
   const taxRet = ap.E - 1;
-  const gov = 2*C - Math.round(S*0.35); const pt = C + Math.round(S*0.6); const gt = 2*C + Math.round(S*0.6);
+  const fixedSpecials = new Set([0,C,2*C,3*C,1,2*C-1,C+1,taxRet,...Object.values(ap),...Object.values(rw)]);
+  const used = new Set([...fixedSpecials]);
+  function placeSpecial(pref) {
+    let pos = Math.min(Math.max(2, pref), total - 2);
+    let guard = 0;
+    while (used.has(pos) && guard < total) {
+      pos = (pos + 1) % total;
+      if (pos <= 1) pos = 2;
+      guard++;
+    }
+    used.add(pos);
+    return pos;
+  }
+  const gov = placeSpecial(2*C - Math.round(S*0.35));
+  const pt  = placeSpecial(C + Math.round(S*0.6));
+  const gt  = placeSpecial(2*C + Math.round(S*0.6));
   const surp = [
-    Math.min(Math.max(2,Math.round(S*0.2)),total-1),
-    Math.min(C+Math.round(S*0.8),total-1),
-    Math.min(2*C+Math.round(S*0.7),total-1),
-    Math.min(3*C+Math.round(S*0.8),total-1),
-  ].filter(p => p !== taxRet && p !== rw.S && p !== rw.W && p !== rw.N && p !== rw.E);
-  const specials = new Set([0,C,2*C,3*C,1,2*C-1,C+1,gov,pt,gt,taxRet,...Object.values(ap),...Object.values(rw),...surp]);
+    placeSpecial(Math.round(S*0.2)),
+    placeSpecial(C+Math.round(S*0.8)),
+    placeSpecial(2*C+Math.round(S*0.7)),
+    placeSpecial(3*C+Math.round(S*0.8)),
+  ];
+  const specials = new Set([...used]);
   const propSlots = Array.from({length:total},(_,i)=>i).filter(i => !specials.has(i));
   const grpSz = Math.ceil(propSlots.length / 8);
   const grpMap = {}; propSlots.forEach((pos,i) => grpMap[pos] = `g${Math.min(Math.floor(i/grpSz), 7)}`);
@@ -931,7 +1094,7 @@ export function generateDefaultBoard(S) {
   for (let pos = 0; pos < total; pos++) {
     if      (pos === 0)       board.push({pos,type:"go",name:"GO"});
     else if (pos === C)       board.push({pos,type:"jail",name:"Jail"});
-    else if (pos === 2*C)     board.push({pos,type:"free_parking",name:"Free Parking"});
+    else if (pos === 2*C)     board.push({pos,type:"free_parking",name:"Treasure"});
     else if (pos === 3*C)     board.push({pos,type:"go_to_jail",name:"Go To Jail"});
     else if (pos === 1)       board.push({pos,type:"income_tax",name:"💰 Income Tax"});
     else if (pos === 2*C-1)   board.push({pos,type:"luxury_tax",name:"💰 Luxury Tax",amount:100});
@@ -939,7 +1102,7 @@ export function generateDefaultBoard(S) {
     else if (pos === gov)     board.push({pos,type:"gov_prot",name:"🏛️ Gov. Protection"});
     else if (pos === pt)      board.push({pos,type:"property_tax",name:"🏠 Property Tax"});
     else if (pos === gt)      board.push({pos,type:"gains_tax",name:"📈 Gains Tax"});
-    else if (pos === taxRet)  board.push({pos,type:"tax_return",name:"📋 Tax Refund"});
+    else if (pos === taxRet)  board.push({pos,type:"tax_return",name:"$ Tax Refund"});
     else if (pos === ap.S)    board.push({pos,type:"airport",name:"✈ South Airport",label:"south",price:200,owner:null,mortgaged:false});
     else if (pos === ap.W)    board.push({pos,type:"airport",name:"✈ West Airport",label:"west",price:200,owner:null,mortgaged:false});
     else if (pos === ap.N)    board.push({pos,type:"airport",name:"✈ North Airport",label:"north",price:200,owner:null,mortgaged:false});
@@ -969,7 +1132,7 @@ export function generateRandomBoard(seedStr, mode, S) {
     const c = rngPick(COUNTRIES);
     let i = 0;
     for (const sp of board.filter(s => s.type === "property")) {
-      sp.name = c.cities[i % c.cities.length]; sp.countryFlag = c.flag; sp.countryName = c.name; i++;
+      sp.name = c.cities[i % c.cities.length]; sp.countryFlag = c.flag; sp.countryName = c.name; sp.countryCode = c.code; i++;
     }
   } else {
     const used = new Set();
@@ -984,7 +1147,7 @@ export function generateRandomBoard(seedStr, mode, S) {
       } else pool = COUNTRIES;
       const c = rngPick(pool); used.add(c.code); let ci = 0;
       for (const sp of board.filter(s => s.type === "property" && s.group === grp)) {
-        sp.name = c.cities[ci % c.cities.length]; sp.countryFlag = c.flag; sp.countryName = c.name; ci++;
+        sp.name = c.cities[ci % c.cities.length]; sp.countryFlag = c.flag; sp.countryName = c.name; sp.countryCode = c.code; ci++;
       }
     }
   }
@@ -995,6 +1158,7 @@ export function generateDomesticBoard(preset, S) {
   const dm = DOMESTIC_MAPS[preset];
   if (!dm) return generateDefaultBoard(S);
   const board = generateDefaultBoard(S);
+  const presetCountryCode = {india:"in",uk:"gb",usa:"us"}[preset] || "";
   const states = dm.states;
   const propByGroup = {};
   for (const sp of board) {
@@ -1012,6 +1176,7 @@ export function generateDomesticBoard(preset, S) {
       const city = cities[ci % cities.length];
       sp.name = city; sp.stateName = state.name;
       sp.countryFlag = dm.flag; sp.countryName = dm.name;
+      sp.countryCode = presetCountryCode;
       sp.price = basePrice + ci * 10; sp.rents = buildRents(sp.price);
       sp.houseCost = Math.max(50, Math.floor(sp.price * 0.5));
     });
@@ -1052,9 +1217,10 @@ export function doStartBankruptAuction(gs, pi, data) {
 function openAuction(gs, pos, basePrice, isBankrupt, auctioneerIdx) {
   const sp = gs.board[pos];
   gs.auction = {
-    pos, basePrice, currentBid: basePrice,
+    pos, basePrice: 0, currentBid: 0,
     highBidder: null, bidHistory: [], folded: [],
     isBankrupt, auctioneerIdx, active: true, timerStart: null,
+    lastBidder: null,
     propertySnapshot: {
       name: sp.name||"", price: sp.price||0, group: sp.group,
       rents: sp.rents||[], houseCost: sp.houseCost||0, houses: sp.houses||0,
@@ -1063,17 +1229,18 @@ function openAuction(gs, pos, basePrice, isBankrupt, auctioneerIdx) {
     },
   };
   gs.phase = "auction";
-  gs.log.push(`🔨 Auction started for ${sp.name}! Base: ${gs.settings.currency}${basePrice}`);
+  gs.log.push(`🔨 Auction started for ${sp.name}! Start bid: ${gs.settings.currency}0`);
 }
 
 export function doAuctionBid(gs, pi, data) {
   if (gs.phase !== "auction" || !gs.auction) return;
   const p = gs.players[pi]; const auc = gs.auction;
   if (auc.folded.includes(p.id)) return;
-  const amount = parseInt(data.amount || auc.currentBid + 10);
+  if (auc.lastBidder === p.id) return;
+  const amount = parseInt(data.amount || (auc.currentBid + 2));
   if (amount <= auc.currentBid) return;
   if (p.money < amount) return;
-  auc.currentBid = amount; auc.highBidder = p.id; auc.timerStart = null;
+  auc.currentBid = amount; auc.highBidder = p.id; auc.timerStart = null; auc.lastBidder = p.id;
   auc.bidHistory.push({playerId:p.id,playerName:p.name,amount});
   gs.log.push(`🔨 ${p.name} bids ${gs.settings.currency}${amount}`);
 }

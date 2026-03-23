@@ -5,9 +5,14 @@ import { createServer } from "http";
 import { Server } from "socket.io";
 import express from "express";
 import { randomUUID } from "crypto";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
 import * as E from "./engine.js";
 
 const PORT = parseInt(process.env.GAME_PORT || "8001");
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const GAME_PUBLIC_DIR = join(__dirname, "..", "public", "game");
 
 const app = express();
 const httpServer = createServer(app);
@@ -15,6 +20,11 @@ const io = new Server(httpServer, {
   cors: { origin: "*", methods: ["GET","POST"] },
   pingTimeout: 60000,
   pingInterval: 25000,
+});
+
+app.use(express.static(GAME_PUBLIC_DIR));
+app.get("/", (_req, res) => {
+  res.sendFile(join(GAME_PUBLIC_DIR, "index.html"));
 });
 
 // ─── State ────────────────────────────────────────────
