@@ -162,9 +162,13 @@
   <div class="editor-body">
     <!-- LEFT: Country Pool -->
     <div class="editor-left">
-      <div class="editor-panel-title">Country Pool</div>
-      <input class="inp editor-search" id="editor-search" placeholder="🔍 Search countries or cities…" oninput="editorFilterCountries(this.value)">
-      <div id="editor-country-pool" class="editor-country-pool"></div>
+      <div class="editor-panel-title">Country Pool
+        <button class="ed-collapse-btn" id="ed-collapse-left-btn" onclick="editorCollapseLeft()" title="Collapse panel">◀</button>
+      </div>
+      <div class="ed-left-content">
+        <input class="inp editor-search" id="editor-search" placeholder="🔍 Search countries or cities…" oninput="editorFilterCountries(this.value)">
+        <div id="editor-country-pool" class="editor-country-pool"></div>
+      </div>
     </div>
     <!-- CENTER: Board -->
     <div class="editor-center">
@@ -184,6 +188,9 @@
     </div>
     <!-- RIGHT: Settings -->
     <div class="editor-right" id="editor-right">
+      <div class="editor-panel-title ed-right-title">Settings
+        <button class="ed-collapse-btn" id="ed-collapse-right-btn" onclick="editorCollapseRight()" title="Collapse panel">▶</button>
+      </div>
       <div class="ed-section">
         <div class="ed-section-title">BOARD SIZE</div>
         <input type="range" id="ed-size" min="6" max="12" value="9" oninput="editorSetSize(+this.value)" class="ed-slider">
@@ -257,6 +264,8 @@
       <div class="ed-section">
         <div class="ed-section-title">RULES</div>
         <div class="ed-row"><label>No Rent in Jail</label><label class="toggle-sw sm"><input type="checkbox" id="ed-norentjail" checked onchange="editorSetToggle('noRentInJail',this.checked)"><span class="toggle-knob"></span></label></div>
+        <div class="ed-row"><label>Surprise Tiles on Board</label><label class="toggle-sw sm"><input type="checkbox" id="ed-surprises" checked onchange="editorSetToggle('enableSurprises',this.checked);editorRenderBoard()"><span class="toggle-knob"></span></label></div>
+        <div class="ed-row"><label>Treasure Tiles on Board</label><label class="toggle-sw sm"><input type="checkbox" id="ed-treasures" checked onchange="editorSetToggle('enableTreasures',this.checked);editorRenderBoard()"><span class="toggle-knob"></span></label></div>
         <div class="ed-row"><label>Very Bad Surprises</label><label class="toggle-sw sm"><input type="checkbox" id="ed-verybad" checked onchange="editorSetToggle('enableVeryBadSurprises',this.checked)"><span class="toggle-knob"></span></label></div>
         <div class="ed-row"><label>Very Good Surprises</label><label class="toggle-sw sm"><input type="checkbox" id="ed-verygood" checked onchange="editorSetToggle('enableVeryGoodSurprises',this.checked)"><span class="toggle-knob"></span></label></div>
       </div>

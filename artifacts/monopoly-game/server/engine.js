@@ -420,9 +420,10 @@ function landOn(gs, idx) {
   const p = gs.players[idx]; const sp = gs.board[p.position]; const pos = p.position;
   gs.log.push(`📍 ${p.name} → ${sp.name}`);
   if (pos === gs.hazardPos)    { applyHazard(gs, idx); return; }
-  if (pos === gs.taxReturnPos) { landTaxReturn(gs, idx); return; }
+  if (pos === gs.taxReturnPos) { landTaxReturn(gs, idx); gs.phase = "action"; return; }
   if (pos === gs.randomTaxPos) { landRandomTax(gs, idx); return; }
   const t = sp.type; const s = gs.settings;
+  if (t === "tax_return") { landTaxReturn(gs, idx); gs.phase = "action"; return; }
   if (t === "go")                  gs.phase = "action";
   else if (t === "jail")           gs.phase = "action";
   else if (t === "free_parking") {
@@ -907,16 +908,21 @@ function buildRents(price) {
 
 export function generateDefaultBoard(S) {
   const C = S + 1; const total = 4 * C;
-  const ap = {S:Math.round(S*0.4), W:C+Math.round(S*0.5), N:2*C+Math.round(S*0.5), E:3*C+Math.round(S*0.5)};
-  const rw = {S:Math.round(S*0.7), W:C+Math.round(S*0.7), N:2*C+Math.round(S*0.3), E:3*C+Math.round(S*0.3)};
+  // Airports at exact centre of each side
+  const half = Math.round(S / 2);
+  const ap = {S: half, W: C + half, N: 2*C + half, E: 3*C + half};
+  // Railways 2 steps before each airport
+  const rw = {S: ap.S - 2, W: ap.W - 2, N: ap.N - 2, E: ap.E - 2};
+  // Tax Refund tile: between east railway and east airport (ap.E - 1)
+  const taxRet = ap.E - 1;
   const gov = 2*C - Math.round(S*0.35); const pt = C + Math.round(S*0.6); const gt = 2*C + Math.round(S*0.6);
   const surp = [
     Math.min(Math.max(2,Math.round(S*0.2)),total-1),
     Math.min(C+Math.round(S*0.8),total-1),
     Math.min(2*C+Math.round(S*0.7),total-1),
     Math.min(3*C+Math.round(S*0.8),total-1),
-  ];
-  const specials = new Set([0,C,2*C,3*C,1,2*C-1,C+1,gov,pt,gt,...Object.values(ap),...Object.values(rw),...surp]);
+  ].filter(p => p !== taxRet && p !== rw.S && p !== rw.W && p !== rw.N && p !== rw.E);
+  const specials = new Set([0,C,2*C,3*C,1,2*C-1,C+1,gov,pt,gt,taxRet,...Object.values(ap),...Object.values(rw),...surp]);
   const propSlots = Array.from({length:total},(_,i)=>i).filter(i => !specials.has(i));
   const grpSz = Math.ceil(propSlots.length / 8);
   const grpMap = {}; propSlots.forEach((pos,i) => grpMap[pos] = `g${Math.min(Math.floor(i/grpSz), 7)}`);
@@ -933,6 +939,7 @@ export function generateDefaultBoard(S) {
     else if (pos === gov)     board.push({pos,type:"gov_prot",name:"🏛️ Gov. Protection"});
     else if (pos === pt)      board.push({pos,type:"property_tax",name:"🏠 Property Tax"});
     else if (pos === gt)      board.push({pos,type:"gains_tax",name:"📈 Gains Tax"});
+    else if (pos === taxRet)  board.push({pos,type:"tax_return",name:"📋 Tax Refund"});
     else if (pos === ap.S)    board.push({pos,type:"airport",name:"✈ South Airport",label:"south",price:200,owner:null,mortgaged:false});
     else if (pos === ap.W)    board.push({pos,type:"airport",name:"✈ West Airport",label:"west",price:200,owner:null,mortgaged:false});
     else if (pos === ap.N)    board.push({pos,type:"airport",name:"✈ North Airport",label:"north",price:200,owner:null,mortgaged:false});

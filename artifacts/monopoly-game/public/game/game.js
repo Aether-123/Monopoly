@@ -34,9 +34,11 @@ let editorSettings={
   startingCash:1500,goSalary:200,treasurePot:true,incomeTaxRate:10,
   airportFee:100,railwayFee:75,noRentInJail:true,
   enableVeryBadSurprises:true,enableVeryGoodSurprises:true,
+  enableSurprises:true,enableTreasures:true,
   maxPlayers:6,privateRoom:false
 };
 let editorDragSrc=null;
+let editorPoolDragData=null; // {countryCode, cityIndex} when dragging from pool
 let editorCustomSpaces=null; // custom board from editor
 
 /* ─── HELPERS ──────────────────────────────────────────── */
@@ -1558,7 +1560,7 @@ function editorRenderCountryPool(){
     const citiesHtml=c.cities.map((city,i)=>{
       const price=c.base+i*10;
       const active=addedCities.has(city);
-      return`<div class="ed-city-chip${active?" active":""}" onclick="editorToggleCity('${c.code}',${i})" title="${active?"Remove":"Add"} ${city}">
+      return`<div class="ed-city-chip${active?" active":""}" draggable="true" data-code="${c.code}" data-idx="${i}" onclick="editorToggleCity('${c.code}',${i})" title="${active?"Remove from":"Drag to place"} ${city}">
         <span class="ed-city-name">${city}</span>
         <span class="ed-city-price">${CUR()}${price}</span>
       </div>`;
@@ -1580,6 +1582,25 @@ function editorRenderCountryPool(){
       </div>
     </div>`;
   }).join("");
+  // Attach drag listeners to all chips via delegation on the pool container
+  el.addEventListener("dragstart",_edPoolDragStart,{capture:true});
+  el.addEventListener("dragend",_edPoolDragEnd,{capture:true});
+}
+function _edPoolDragStart(e){
+  const chip=e.target.closest(".ed-city-chip");if(!chip)return;
+  editorPoolDragData={countryCode:chip.dataset.code,cityIndex:+chip.dataset.idx};
+  editorDragSrc=null;
+  e.dataTransfer.effectAllowed="copy";
+  e.dataTransfer.setData("text/plain","pool:"+chip.dataset.code+":"+chip.dataset.idx);
+  chip.classList.add("dragging");
+  setTimeout(()=>{
+    document.querySelectorAll(".ed-tile.ed-empty,.ed-tile.ed-prop").forEach(t=>t.classList.add("drop-hint"));
+  },0);
+}
+function _edPoolDragEnd(e){
+  const chip=e.target.closest(".ed-city-chip");if(chip)chip.classList.remove("dragging");
+  editorPoolDragData=null;
+  document.querySelectorAll(".ed-tile").forEach(t=>t.classList.remove("drop-hint","drag-over"));
 }
 
 function editorToggleCountry(code){
@@ -1644,12 +1665,12 @@ function editorRemoveCountry(code){
 function editorAddCountry(code){ editorAddAllCities(code); }
 
 function editorGetFreeSlots(n){
-  const total=4*(editorSize+1);
-  const C=editorSize+1;
-  const fixed=new Set([0,C,2*C,3*C]);
-  const used=new Set(editorBoard.map(s=>s.pos));
+  const S=editorSize,total=4*(S+1);
+  const board=buildEditorFullBoard(S);
   const free=[];
-  for(let i=1;i<total;i++){if(!fixed.has(i)&&!used.has(i))free.push(i);}
+  for(let i=1;i<total;i++){
+    if(board[i]&&board[i].type==="empty")free.push(i);
+  }
   return free.slice(0,n);
 }
 
@@ -1659,47 +1680,75 @@ function editorRenderBoard(){
   const S=editorSize,C=S+1,total=4*C;
   el.style.cssText=`grid-template-columns:70px repeat(${S},40px) 70px;grid-template-rows:70px repeat(${S},40px) 70px`;
   el.innerHTML="";
-
-  // Build full board with specials
   const board=buildEditorFullBoard(S);
+  const ICONS={airport:"✈️",railway:"🚂",gov_prot:"🏛️",chest:"📦",chance:"❓",income_tax:"💰",property_tax:"🏠",gains_tax:"📈",luxury_tax:"💸",tax_return:"📋",empty:"·"};
 
   board.forEach((sp,pos)=>{
     const{col,row}=gridPos(pos,S);
     const side=sideOf(pos,S);
     const isCorner=[0,C,2*C,3*C].includes(pos);
     const div=document.createElement("div");
-    div.className=`ed-tile ed-tile-${side}${isCorner?" ed-corner":""}${sp.type==="property"?" ed-prop":""}`;
+    const typeClass=sp.type==="property"?" ed-prop":sp.type==="empty"?" ed-empty":sp.type==="airport"?" ed-airport":sp.type==="railway"?" ed-rail":sp.type==="tax_return"?" ed-taxret":"";
+    div.className=`ed-tile ed-tile-${side}${isCorner?" ed-corner":""}${typeClass}`;
     div.dataset.pos=pos;div.style.cssText=`grid-column:${col};grid-row:${row}`;
     div.onclick=()=>showEditorPropPopup(sp,pos);
 
     if(isCorner){
-      const icons={0:"🚀 START",[C]:"⛓️ JAIL",[C*2]:"🅿️ FREE",[C*3]:"👮 JAIL"};
-      div.innerHTML=`<div class="ed-corner-in">${icons[pos]||""}</div>`;
+      const labels={0:"🚀\nSTART",[C]:"⛓️\nJAIL",[C*2]:"🅿️\nFREE",[C*3]:"👮\nGO\nJAIL"};
+      div.innerHTML=`<div class="ed-corner-in">${labels[pos]||""}</div>`;
     }else{
       const gi=sp.group?parseInt(sp.group.slice(1)):-1;
       const gc=gi>=0?GRP_COLORS[gi]:null;
-      const icon=({airport:"✈",railway:"🚂",gov_prot:"🏛️",chest:"📦",chance:"❓",income_tax:"💰",property_tax:"🏠",gains_tax:"📈",luxury_tax:"💸"})[sp.type]||sp.countryFlag||"🏙️";
+      const icon=ICONS[sp.type]||(sp.countryFlag||"🏙️");
       if(gc)div.style.setProperty("--ed-grp-color",gc);
-      div.innerHTML=`<div class="ed-tile-inner"><span class="ed-flag">${icon}</span><span class="ed-nm">${sp.name}</span>${sp.price?`<span class="ed-price">${CUR()}${sp.price}</span>`:""}</div>`;
-      // Drag & drop for properties
-      if(sp.type==="property"){
-        div.draggable=true;
-        div.addEventListener("dragstart",e=>{editorDragSrc=pos;e.dataTransfer.effectAllowed="move";div.classList.add("dragging");});
-        div.addEventListener("dragend",()=>div.classList.remove("dragging"));
-        div.addEventListener("dragover",e=>{e.preventDefault();div.classList.add("drag-over");});
-        div.addEventListener("dragleave",()=>div.classList.remove("drag-over"));
+      const nameText=sp.type==="empty"?"":sp.name||"";
+      div.innerHTML=`<div class="ed-tile-inner"><span class="ed-flag">${icon}</span>${nameText?`<span class="ed-nm">${nameText}</span>`:""}${sp.price?`<span class="ed-price">${CUR()}${sp.price}</span>`:""}</div>`;
+
+      // All empty + property tiles accept drops (from pool or from board)
+      const isDroppable=sp.type==="empty"||sp.type==="property";
+      if(isDroppable){
+        div.addEventListener("dragenter",e=>{e.preventDefault();div.classList.add("drag-over");});
+        div.addEventListener("dragover",e=>{e.preventDefault();e.dataTransfer.dropEffect=editorPoolDragData?"copy":"move";div.classList.add("drag-over");});
+        div.addEventListener("dragleave",e=>{if(!div.contains(e.relatedTarget))div.classList.remove("drag-over");});
         div.addEventListener("drop",e=>{
           e.preventDefault();div.classList.remove("drag-over");
-          if(editorDragSrc===pos||editorDragSrc==null)return;
-          const srcSp=board.find(s=>s.pos===editorDragSrc);
-          const dstSp=board.find(s=>s.pos===pos);
-          if(srcSp&&dstSp&&srcSp.type==="property"&&dstSp.type==="property"){
-            [srcSp.pos,dstSp.pos]=[dstSp.pos,srcSp.pos];
-            const si=editorBoard.findIndex(s=>s.pos===editorDragSrc);
-            const di=editorBoard.findIndex(s=>s.pos===pos);
-            if(si>=0&&di>=0){[editorBoard[si].pos,editorBoard[di].pos]=[editorBoard[di].pos,editorBoard[si].pos];}
-            editorRenderBoard();toast("↔ Swapped!");
+          document.querySelectorAll(".ed-tile").forEach(t=>t.classList.remove("drop-hint","drag-over"));
+          if(editorPoolDragData){
+            // Place city from pool onto this slot
+            editorPoolDropOnBoard(editorPoolDragData.countryCode,editorPoolDragData.cityIndex,pos);
+            editorPoolDragData=null;
+          }else if(editorDragSrc!==null&&editorDragSrc!==pos){
+            const srcSp=editorBoard.find(s=>s.pos===editorDragSrc);
+            if(srcSp){
+              if(sp.type==="empty"){
+                srcSp.pos=pos;
+              }else{
+                const dstSp=editorBoard.find(s=>s.pos===pos);
+                if(dstSp)[srcSp.pos,dstSp.pos]=[dstSp.pos,srcSp.pos];
+              }
+              editorRenderBoard();editorRenderCountryPool();toast("✅ Moved!");
+            }
+            editorDragSrc=null;
           }
+        });
+      }
+
+      // Board properties can be dragged to other slots
+      if(sp.type==="property"){
+        div.draggable=true;
+        div.addEventListener("dragstart",e=>{
+          editorDragSrc=pos;editorPoolDragData=null;
+          e.dataTransfer.effectAllowed="move";
+          div.classList.add("dragging");
+          setTimeout(()=>{
+            document.querySelectorAll(".ed-tile.ed-empty,.ed-tile.ed-prop").forEach(t=>{
+              if(+t.dataset.pos!==pos)t.classList.add("drop-hint");
+            });
+          },0);
+        });
+        div.addEventListener("dragend",()=>{
+          div.classList.remove("dragging");
+          document.querySelectorAll(".ed-tile").forEach(t=>t.classList.remove("drop-hint","drag-over"));
           editorDragSrc=null;
         });
       }
@@ -1710,43 +1759,87 @@ function editorRenderBoard(){
   updateEditorCounts();
 }
 
+function editorPoolDropOnBoard(countryCode,cityIndex,targetPos){
+  const c=editorCountries.find(x=>x.code===countryCode);if(!c)return;
+  const city=c.cities[cityIndex];if(!city)return;
+  const price=c.base+cityIndex*10;
+  const S=editorSize,C=S+1;
+  // Verify target is empty or property (not a fixed special)
+  const board=buildEditorFullBoard(S);
+  const targetTile=board[targetPos];
+  if(!targetTile||!["empty","property"].includes(targetTile.type))return;
+  // Remove this city from board if already placed elsewhere
+  editorBoard=editorBoard.filter(s=>!(s.countryCode===countryCode&&s.name===city));
+  // Remove whatever was at the target slot
+  editorBoard=editorBoard.filter(s=>s.pos!==targetPos);
+  // Place city at the chosen slot
+  editorBoard.push({pos:targetPos,type:"property",
+    group:`g${Math.floor(targetPos/C)%8}`,
+    name:city,countryCode:c.code,countryFlag:c.flag,countryName:c.name,
+    price,rents:[Math.floor(price*.04),Math.floor(price*.2),Math.floor(price*.6),Math.floor(price*1.4),Math.floor(price*1.7),Math.floor(price*2)],
+    houseCost:Math.max(50,Math.floor(price*.5)),houses:0,owner:null,mortgaged:false});
+  toast(`📍 ${c.flag} ${city} → slot #${targetPos}`);
+  editorRenderCountryPool();
+  editorRenderBoard();
+}
+
 function buildEditorFullBoard(S){
   const C=S+1,total=4*C;
-  const board=[];
   const specials={};
   // Corners
   specials[0]={pos:0,type:"go",name:"START"};
   specials[C]={pos:C,type:"jail",name:"Jail"};
   specials[2*C]={pos:2*C,type:"free_parking",name:"Free"};
   specials[3*C]={pos:3*C,type:"go_to_jail",name:"Go Jail"};
-  // Airports
-  const ap={S:Math.round(S*.4),W:C+Math.round(S*.5),N:2*C+Math.round(S*.5),E:3*C+Math.round(S*.5)};
-  specials[ap.S]={pos:ap.S,type:"airport",name:"✈ S Airport",price:200,owner:null,mortgaged:false};
-  specials[ap.W]={pos:ap.W,type:"airport",name:"✈ W Airport",price:200,owner:null,mortgaged:false};
-  specials[ap.N]={pos:ap.N,type:"airport",name:"✈ N Airport",price:200,owner:null,mortgaged:false};
-  specials[ap.E]={pos:ap.E,type:"airport",name:"✈ E Airport",price:200,owner:null,mortgaged:false};
-  // Railways
-  const rw={S:Math.round(S*.7),W:C+Math.round(S*.7),N:2*C+Math.round(S*.3),E:3*C+Math.round(S*.3)};
-  specials[rw.S]={pos:rw.S,type:"railway",name:"🚂 S Rail",price:150,owner:null,mortgaged:false};
-  specials[rw.W]={pos:rw.W,type:"railway",name:"🚂 W Rail",price:150,owner:null,mortgaged:false};
-  specials[rw.N]={pos:rw.N,type:"railway",name:"🚂 N Rail",price:150,owner:null,mortgaged:false};
-  specials[rw.E]={pos:rw.E,type:"railway",name:"🚂 E Rail",price:150,owner:null,mortgaged:false};
+  // Airports — exact centre of each side
+  const half=Math.round(S/2);
+  const ap={S:half,W:C+half,N:2*C+half,E:3*C+half};
+  specials[ap.S]={pos:ap.S,type:"airport",name:"✈ S Airport",price:200};
+  specials[ap.W]={pos:ap.W,type:"airport",name:"✈ W Airport",price:200};
+  specials[ap.N]={pos:ap.N,type:"airport",name:"✈ N Airport",price:200};
+  specials[ap.E]={pos:ap.E,type:"airport",name:"✈ E Airport",price:200};
+  // Railways — 2 steps before each airport
+  const rw={S:ap.S-2,W:ap.W-2,N:ap.N-2,E:ap.E-2};
+  specials[rw.S]={pos:rw.S,type:"railway",name:"🚂 S Rail",price:150};
+  specials[rw.W]={pos:rw.W,type:"railway",name:"🚂 W Rail",price:150};
+  specials[rw.N]={pos:rw.N,type:"railway",name:"🚂 N Rail",price:150};
+  specials[rw.E]={pos:rw.E,type:"railway",name:"🚂 E Rail",price:150};
+  // Tax Refund — between east railway and east airport
+  const taxRet=ap.E-1;
+  specials[taxRet]={pos:taxRet,type:"tax_return",name:"📋 Tax Refund"};
   // Other specials
   specials[1]={pos:1,type:"income_tax",name:"💰 Tax"};
   specials[2*C-1]={pos:2*C-1,type:"luxury_tax",name:"💸 Luxury"};
-  specials[C+1]={pos:C+1,type:"chest",name:"📦 Chest"};
+  if(editorSettings.enableTreasures!==false)
+    specials[C+1]={pos:C+1,type:"chest",name:"📦 Chest"};
   specials[2*C-Math.round(S*.35)]={pos:2*C-Math.round(S*.35),type:"gov_prot",name:"🏛️ Gov"};
-  [Math.round(S*.2),C+Math.round(S*.8),2*C+Math.round(S*.7),3*C+Math.round(S*.8)].forEach((p,i)=>{
-    if(!specials[p])specials[p]={pos:p,type:"chance",name:"❓ Surprise"};
-  });
-
+  if(editorSettings.enableSurprises!==false){
+    [Math.round(S*.2),C+Math.round(S*.8),2*C+Math.round(S*.7),3*C+Math.round(S*.8)].forEach(p=>{
+      if(p>0&&p<total&&!specials[p])specials[p]={pos:p,type:"chance",name:"❓ Surprise"};
+    });
+  }
+  const board=[];
   for(let pos=0;pos<total;pos++){
     if(specials[pos]){board.push(specials[pos]);continue;}
     const edSp=editorBoard.find(s=>s.pos===pos);
-    if(edSp){board.push(edSp);}
-    else board.push({pos,type:"empty",name:"",group:`g${pos%8}`});
+    if(edSp)board.push(edSp);
+    else board.push({pos,type:"empty",name:""});
   }
   return board;
+}
+
+/* ─── EDITOR COLLAPSE ───────────────────────────────────── */
+function editorCollapseLeft(){
+  const body=document.querySelector(".editor-body");
+  const collapsed=body.classList.toggle("left-collapsed");
+  const btn=qid("ed-collapse-left-btn");
+  if(btn)btn.textContent=collapsed?"▶":"◀";
+}
+function editorCollapseRight(){
+  const body=document.querySelector(".editor-body");
+  const collapsed=body.classList.toggle("right-collapsed");
+  const btn=qid("ed-collapse-right-btn");
+  if(btn)btn.textContent=collapsed?"◀":"▶";
 }
 
 function updateEditorCounts(){
