@@ -861,7 +861,15 @@ function showTurnBanner(name){
 function updateDiceOver(){
   const o=qid("dice-over");if(!o)return;
   const isMT=gs?.players[gs.currentPlayerIdx]?.id===myId;
-  if(gs?.phase==="roll"&&isMT)o.classList.remove("dh");else o.classList.add("dh");
+  const canRoll=gs?.phase==="roll"&&isMT;
+  if(canRoll)o.classList.remove("dh");else o.classList.add("dh");
+  o.style.cursor=canRoll?"pointer":"default";
+  const hint=qid("dice-hint-txt");
+  if(hint){
+    const me=gs?.players?.find(p=>p.id===myId);
+    if(me?.inJail)hint.textContent="🎲 Roll for doubles";
+    else hint.textContent="🎲 Click to Roll!";
+  }
   if(gs?.lastRoll){qid("d1").textContent=DF[gs.lastRoll[0]-1];qid("d2").textContent=DF[gs.lastRoll[1]-1];}
 }
 
