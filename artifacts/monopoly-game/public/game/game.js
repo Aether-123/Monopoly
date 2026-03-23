@@ -1375,7 +1375,7 @@ function editorRenderCountryPool(){
     const addedCities=new Set(editorBoard.filter(s=>s.countryCode===c.code).map(s=>s.name));
     const onBoard=addedCities.size>0;
     const citiesHtml=c.cities.map((city,i)=>{
-      const price=c.base+i*20;
+      const price=c.base+i*10;
       const active=addedCities.has(city);
       return`<div class="ed-city-chip${active?" active":""}" onclick="editorToggleCity('${c.code}',${i})" title="${active?"Remove":"Add"} ${city}">
         <span class="ed-city-name">${city}</span>
@@ -1387,7 +1387,7 @@ function editorRenderCountryPool(){
         <span class="ed-country-flag">${c.flag}</span>
         <div class="ed-country-info">
           <div class="ed-country-name">${c.name}</div>
-          <div class="ed-country-meta">Tier ${c.tier} · ${CUR()}${c.base}–${CUR()}${c.base+(c.cities.length-1)*20} · ${addedCities.size}/${c.cities.length} cities</div>
+          <div class="ed-country-meta">Tier ${c.tier} · ${CUR()}${c.base}–${CUR()}${c.base+(c.cities.length-1)*10} · ${addedCities.size}/${c.cities.length} cities</div>
         </div>
         <div style="display:flex;gap:3px;align-items:center">
           <button class="ed-add-btn" onclick="event.stopPropagation();editorAddAllCities('${c.code}')" title="Add all cities from ${c.name}">+All</button>
@@ -1411,7 +1411,7 @@ function editorToggleCountry(code){
 function editorToggleCity(code,cityIndex){
   const c=editorCountries.find(x=>x.code===code);if(!c)return;
   const city=c.cities[cityIndex];
-  const price=c.base+cityIndex*20;
+  const price=c.base+cityIndex*10;
   const existing=editorBoard.findIndex(s=>s.countryCode===code&&s.name===city);
   if(existing>=0){
     editorBoard.splice(existing,1);
@@ -1440,7 +1440,7 @@ function editorAddAllCities(code){
   toAdd.forEach((city,i)=>{
     if(!slots[i])return;
     const cityIndex=c.cities.indexOf(city);
-    const price=c.base+cityIndex*20;
+    const price=c.base+cityIndex*10;
     editorBoard=editorBoard.filter(s=>s.pos!==slots[i]);
     editorBoard.push({pos:slots[i],type:"property",group:`g${Math.floor(slots[i]/(editorSize+1))%8}`,
       name:city,countryCode:c.code,countryFlag:c.flag,countryName:c.name,

@@ -94,3 +94,24 @@ Generated React Query hooks and fetch client from the OpenAPI spec (e.g. `useHea
 ### `scripts` (`@workspace/scripts`)
 
 Utility scripts package. Each script is a `.ts` file in `src/` with a corresponding npm script in `package.json`. Run scripts via `pnpm --filter @workspace/scripts run <script>`. Scripts can import any workspace package (e.g., `@workspace/db`) by adding it as a dependency in `scripts/package.json`.
+
+### `artifacts/monopoly-game` (`@workspace/monopoly-game`)
+
+Full-featured Monopoly Online multiplayer game. Architecture:
+
+- **Frontend**: Vite + React (for routing/redirect only) + vanilla JS game in `public/game/`
+  - `public/game/index.html` — main game HTML (loaded via redirect from React App.tsx)
+  - `public/game/game.js` — full game engine client (~1965 lines)
+  - `public/game/game.css` — vibrant dark theme styling with 8 group colors
+  - `src/App.tsx` — simple redirect to `/game/index.html`
+- **Backend**: Python FastAPI + Socket.IO server (`server/server.py`, `server/engine.py`)
+  - Runs on port 8001 (GAME_PORT env var)
+  - Engine: `server/engine.py` — 27 countries, city prices $20–$510, railways, airports, hazards, surprises
+- **Startup**: `pnpm run dev` launches Python backend (port 8001) then Vite (PORT env var)
+- **Proxy**: Vite proxies `/socket.io/` and `/api/` to Python backend on port 8001
+
+**Key features**: 27 countries, real-time Socket.IO multiplayer, map editor (drag & drop), bank system, custom avatars, 8 board types (standard/worldwide/random/domestic), railways, airports, hazards, auctions, votekick, spectator mode, reconnection grace (2 min), 8 themes.
+
+**City prices**: `price = country.base + cityIndex * 10` — lowest $20 (Nigeria tier 1, city 0), highest ~$510 (Singapore tier 6, city 14).
+
+- `pnpm --filter @workspace/monopoly-game run dev` — starts both Python backend and Vite dev server

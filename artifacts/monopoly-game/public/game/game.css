@@ -4,13 +4,13 @@
 
 /* ── THEME VARIABLES ─────────────────────────────── */
 :root {
-  --bg:#09090f; --card:#12121a; --border:#1e1e2e;
-  --text:#f0f0f5; --muted:#6b6b8a; --accent:#f5c518;
+  --bg:#07080f; --card:#0f1018; --border:#22233a;
+  --text:#f0f0f8; --muted:#6b6b8a; --accent:#f5c518;
   --green:#22c55e; --red:#ef4444; --blue:#3b82f6;
   --orange:#f97316; --purple:#a855f7; --teal:#14b8a6;
-  --corner:#1a1a28;
-  --g0:#b91c1c; --g1:#92400e; --g2:#15803d; --g3:#1d4ed8;
-  --g4:#7c3aed; --g5:#be185d; --g6:#0f766e; --g7:#1e40af;
+  --corner:#12131f;
+  --g0:#dc2626; --g1:#ea580c; --g2:#16a34a; --g3:#2563eb;
+  --g4:#9333ea; --g5:#db2777; --g6:#0d9488; --g7:#1d4ed8;
 }
 [data-theme="cyberpunk"]{--bg:#020008;--card:#0a0014;--border:#1a0030;--text:#e0ffff;--muted:#4a4a7a;--accent:#00fff0;--green:#00e676;--red:#ff1744;--corner:#0d001f;}
 [data-theme="gold"]{--bg:#0a0800;--card:#14100a;--border:#2a1f00;--text:#fff8e1;--muted:#7a6a2a;--accent:#ffd700;--green:#aed581;--red:#ef5350;--corner:#1a1200;}
@@ -187,7 +187,7 @@ button { cursor: pointer; }
 /* Editor Center */
 .editor-center { position: relative; display: flex; flex-direction: column; overflow: hidden; background: var(--bg); }
 .editor-board-scroll { flex: 1; overflow: auto; display: flex; align-items: center; justify-content: center; padding: 1rem; position: relative; }
-.editor-board { display: grid; position: relative; background: color-mix(in srgb, var(--green) 4%, var(--bg)); border: 2px solid var(--border); border-radius: 4px; }
+.editor-board { display: grid; position: relative; background: #0c1f10; border: 2px solid #1a3a1e; border-radius: 4px; }
 .editor-board-wm { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%) rotate(-30deg); font-size: 2.2rem; font-weight: 900; color: var(--accent); opacity: .04; pointer-events: none; white-space: nowrap; user-select: none; letter-spacing: 4px; }
 .editor-hint { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); text-align: center; pointer-events: none; background: var(--card)cc; border: 1px solid var(--border); border-radius: 12px; padding: 1rem 1.4rem; }
 .editor-hint > div:first-child { font-size: .88rem; font-weight: 600; margin-bottom: .3rem; }
@@ -249,7 +249,7 @@ button { cursor: pointer; }
 #turn-banner.show { opacity: 1; animation: bannerBounce .4s ease; }
 @keyframes bannerBounce { 0% { transform: translateX(-50%) translateY(-12px); } 100% { transform: translateX(-50%) translateY(0); } }
 .gl-left { display: flex; flex-direction: column; background: var(--card); border-right: 1px solid var(--border); overflow: hidden; }
-.gl-center { display: flex; flex-direction: column; align-items: center; justify-content: center; overflow: hidden; padding: .4rem; }
+.gl-center { display: flex; flex-direction: column; align-items: center; justify-content: center; overflow: hidden; padding: .4rem; background: #080b0a; }
 .gl-right { display: flex; flex-direction: column; background: var(--card); border-left: 1px solid var(--border); overflow: hidden; }
 .panel-hdr { font-size: .68rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding: .42rem .65rem; background: var(--bg); flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; }
 .border-top { border-top: 1px solid var(--border); }
@@ -308,7 +308,7 @@ button { cursor: pointer; }
 /* ── GAME BOARD ──────────────────────────────────── */
 .game-area { position: relative; flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; width: 100%; height: 100%; }
 .board-wrap { transform-origin: center center; will-change: transform; position: relative; flex-shrink: 0; }
-.board { display: grid; position: relative; background: color-mix(in srgb, var(--green) 5%, var(--bg)); border: 2px solid var(--border); border-radius: 4px; gap: 1px; padding: 1px; }
+.board { display: grid; position: relative; background: #0c1f10; border: 3px solid #1a3a1e; border-radius: 6px; gap: 1px; padding: 1px; box-shadow: 0 0 40px rgba(0,0,0,.8), inset 0 0 60px rgba(0,80,0,.15); }
 .board-wm { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%) rotate(-30deg); font-size: 2.8rem; font-weight: 900; color: var(--accent); opacity: .035; pointer-events: none; white-space: nowrap; letter-spacing: 4px; user-select: none; }
 
 /* ─────────────────────────────────────────────────
@@ -322,16 +322,16 @@ button { cursor: pointer; }
        .sp-pr  = price
 ───────────────────────────────────────────────── */
 .sp {
-  background: var(--card);
-  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  background: #131520;
+  border: 1px solid rgba(255,255,255,0.06);
   overflow: hidden;
   cursor: pointer;
   position: relative;
-  transition: filter .12s;
+  transition: filter .12s, box-shadow .12s;
   user-select: none;
   border-radius: 3px;
 }
-.sp:hover { filter: brightness(1.15); }
+.sp:hover { filter: brightness(1.22); box-shadow: inset 0 0 0 1px rgba(245,197,24,0.25); }
 .spco { border-radius: 5px !important; }
 .spmort { opacity: .4; }
 .sphaz  { box-shadow: inset 0 0 0 2px var(--red); }
@@ -402,7 +402,7 @@ button { cursor: pointer; }
 }
 .sp-bottom .sp-band {
   width: 100%;
-  height: 15px;
+  height: 18px;
 }
 /* content reads top→bottom (strip at top = inner edge facing center) */
 
@@ -413,7 +413,7 @@ button { cursor: pointer; }
 }
 .sp-top .sp-band {
   width: 100%;
-  height: 15px;
+  height: 18px;
 }
 /* column-reverse: band at DOM-end = visual bottom.
    sp-body is above the band.
@@ -432,7 +432,7 @@ button { cursor: pointer; }
   flex-direction: row-reverse;  /* band on right = inner */
 }
 .sp-left .sp-band {
-  width: 15px;
+  width: 18px;
   height: 100%;
 }
 .sp-left .sp-body {
@@ -471,7 +471,7 @@ button { cursor: pointer; }
   flex-direction: row;  /* band on left = inner */
 }
 .sp-right .sp-band {
-  width: 15px;
+  width: 18px;
   height: 100%;
 }
 .sp-right .sp-body {
@@ -505,8 +505,8 @@ button { cursor: pointer; }
   gap: 4px;
   padding: 6px;
 }
-.ci-ico { font-size: 2.2rem; line-height: 1; }
-.ci-lbl { font-size: 11px; font-weight: 900; color: var(--accent); letter-spacing: .05em; text-align: center; }
+.ci-ico { font-size: 2.2rem; line-height: 1; filter: drop-shadow(0 0 6px rgba(245,197,24,0.35)); }
+.ci-lbl { font-size: 11px; font-weight: 900; color: var(--accent); letter-spacing: .05em; text-align: center; text-shadow: 0 0 10px rgba(245,197,24,0.5); }
 
 /* ── OWNERSHIP / HOUSES ── */
 .own-dot { position: absolute; top: 3px; right: 3px; width: 8px; height: 8px; border-radius: 50%; box-shadow: 0 0 0 1.5px var(--bg); z-index: 2; }

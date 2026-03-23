@@ -66,6 +66,17 @@ export default defineConfig({
       strict: true,
       deny: ["**/.*"],
     },
+    proxy: {
+      "/socket.io": {
+        target: "http://localhost:8001",
+        ws: true,
+        changeOrigin: true,
+      },
+      "/api": {
+        target: "http://localhost:8001",
+        changeOrigin: true,
+      },
+    },
   },
   preview: {
     port,
