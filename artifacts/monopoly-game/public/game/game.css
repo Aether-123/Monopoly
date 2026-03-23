@@ -204,8 +204,8 @@ button { cursor: pointer; }
 .ed-tile-right { writing-mode: vertical-lr; }
 .ed-corner { background: var(--corner); }
 .ed-corner-in { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; font-size: .68rem; font-weight: 700; color: var(--accent); }
-.ed-strip { height: 9px; flex-shrink: 0; }
-.ed-tile-left .ed-strip, .ed-tile-right .ed-strip { width: 9px; height: auto; }
+.ed-tile.ed-prop { box-shadow: inset 0 0 0 1.5px var(--ed-grp-color, transparent); }
+.ed-tile.ed-prop:hover { border-color: var(--ed-grp-color, var(--accent)); }
 .ed-tile-inner { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 1px; gap: 0; }
 .ed-flag { font-size: .85rem; line-height: 1; }
 .ed-nm { font-size: 7px; text-align: center; line-height: 1.2; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }

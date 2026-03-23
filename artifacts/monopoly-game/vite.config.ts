@@ -71,6 +71,7 @@ export default defineConfig({
         target: "http://localhost:8001",
         ws: true,
         changeOrigin: true,
+        secure: false,
       },
       "/mapi": {
         target: "http://localhost:8001",

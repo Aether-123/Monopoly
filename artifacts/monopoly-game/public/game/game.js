@@ -42,7 +42,7 @@ let editorCustomSpaces=null; // custom board from editor
 /* ─── HELPERS ──────────────────────────────────────────── */
 const CUR=()=>gs?.settings?.currency||"$";
 const DF=["⚀","⚁","⚂","⚃","⚄","⚅"];
-const GRP_COLORS=["#b91c1c","#92400e","#15803d","#1d4ed8","#7c3aed","#be185d","#0f766e","#1e40af"];
+const GRP_COLORS=["#ef4444","#f97316","#22c55e","#3b82f6","#a855f7","#ec4899","#14b8a6","#6366f1"];
 function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
 function qs(s){return document.querySelector(s);}
 function qid(id){return document.getElementById(id);}
@@ -1677,9 +1677,10 @@ function editorRenderBoard(){
       div.innerHTML=`<div class="ed-corner-in">${icons[pos]||""}</div>`;
     }else{
       const gi=sp.group?parseInt(sp.group.slice(1)):-1;
-      const strip=gi>=0?`<div class="ed-strip" style="background:${GRP_COLORS[gi]}"></div>`:"";
+      const gc=gi>=0?GRP_COLORS[gi]:null;
       const icon=({airport:"✈",railway:"🚂",gov_prot:"🏛️",chest:"📦",chance:"❓",income_tax:"💰",property_tax:"🏠",gains_tax:"📈",luxury_tax:"💸"})[sp.type]||sp.countryFlag||"🏙️";
-      div.innerHTML=`${strip}<div class="ed-tile-inner"><span class="ed-flag">${icon}</span><span class="ed-nm">${sp.name}</span>${sp.price?`<span class="ed-price">${CUR()}${sp.price}</span>`:""}</div>`;
+      if(gc)div.style.setProperty("--ed-grp-color",gc);
+      div.innerHTML=`<div class="ed-tile-inner"><span class="ed-flag">${icon}</span><span class="ed-nm">${sp.name}</span>${sp.price?`<span class="ed-price">${CUR()}${sp.price}</span>`:""}</div>`;
       // Drag & drop for properties
       if(sp.type==="property"){
         div.draggable=true;
