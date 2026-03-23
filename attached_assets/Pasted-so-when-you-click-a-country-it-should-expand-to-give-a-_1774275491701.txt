@@ -1,0 +1,34 @@
+so when you click a country, it should expand to give a list of cities. Like when we click India we get all big cities like Mumbai, Dehli, bangalore, Kolkata, etc. Also I found out that when I click create room, nothing is happening. Also add other good , optional features like banks where you can take loans, railways, which can take you from one city to the next. There will be a railway station before each country and in case of Domestic maps, each city. In domestic maps, make sure that a set is completed when the cities are from the same state e.g Kolkata, Howrah will make the west Bengal set. In UK board Glasgow and Edinburgh will be Scotland set etc,etc.
+Banks will give loans, the amount can be selected by the players. The bank is an independent menu like trades, a modal opens up and people can choose whether to take loans, deposit some of their money, or get a credit card at $50 for 2 rounds. Deposits accrue interest from the bank, when a player withdraws money from the bank, they get back the amount deposited + the interest. Interest is charged in case of loans , the rate of which can be pre-determined by the players before starting the game. Credit cards allow players to purchase properties, on credit from the banks. They will be able to choose the EMI tenure to pay back, but the ceiling is only $500. When the players fall on start, they will be given an option to end turn or Pay EMIs and end turn. If the players don't pay back their due amount + interest within a stipulated time, they will spend 3 turns in Jail, without bail and his properties (houses, hotels) of equal value will be seized as collateral, in case of land it will be mortgaged.
+There will be 4 airports and board size and tiles and number of tiles can be changed by players 
+according to their will. 
+In surprise generate random Bad surprises like Wife stole money, ex wife files divorce agreement, lose money and random good surprises like you found a secret stash of Jewellery worth $500. Generate a 1/100 probability very bad surprise and 1/100 probability very good surprise (Worth $1500). Also create 4 types of tax tiles. 1) Income Tax, 2) Property Tax, 3) Gains tax, 4) Random Tax. Also create another tile for tax returns. Tax returns is dynamic like hazards and will shift periodically.
+
+Also create a board randomizer, like generate a random board. The user will be able to choose it when they select their boards after create game.
+
+There will be online multiplayer engine with other players as well, not just friends.
+On the board, there will be hazards tile, which will shift randomly. 1 surprise tile will randomly turn into a hazard tile. The hazard tile will have a ☠️symbol.
+
+Hazards include
+i) Car Crash (Pay $50 for repair)
+ii) Random Accidents (Pay $100 as hospital bill)
+iii) Robbery (Full Wallet cash gone)
+iv) Natural Disasters like Earthquakes, landslides, cyclones, tsunami destroyed property. (Demolishes 1-2 houses).
+v) Other random hazards.
+
+The players will be able to recover in 2 ways.
+i) There will be a tile called government protection which will be situated at the 7th space from Jail where they will compensate for the loss of property and money in hazards, If when the players go to jail because they can't pay loans, if the player rolls a hand , such that they will fall on Government Protection, the government will bail him out and give him $200 to start over.
+Surprise tiles will randomly reward Government protection cards, which are only useful if the player lands on Jail because they can't pay loans.
+
+ii) They take up insurance against the losses, wherein the bank will return 75% of the money lost in hazards. In case of this insurance card, the insurer will charge a small premium of $50 everytime they fall on start. If the player falls on government protection after availingg the insurance card, the government will cover the rest.
+
+If the player falls on government protection after multiple turns after they fall on hazard, they will still be able to avail government protection.
+
+If the player hasn't fallen on hazards, or isn't in danger of bad debt, the government protection will do nothing, however if the player falls on Government protection and they have less than $100, the government will grant him start money which will be pre-decided by the user.
+
+Before the game begins the players should be able to select the game rules, currency, starting cash, Start money, tax rates, etc.
+ A detailed guide has been provided in the documents and pictures above.
+
+In case of railway tiles. There will be 4 tiles on each side overall.
+
+If the player falls on Northern Railways, they will be able to only go to Eastern railways and southern railways and vice versa. If the player falls on Western railway, they will be able to go to eastern railway. In case the player goes from West to East, start money is received. Similarly Southern railways will go to Western railways and northern railways, Eastern railways will go to southern railways and ...

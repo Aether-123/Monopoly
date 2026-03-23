@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "Monopoly Online"
+version = "1.0.0"
+id = "artifacts/monopoly-game"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 19806
+
+[services.development]
+run = "pnpm --filter @workspace/monopoly-game run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/monopoly-game", "run", "build" ]
+publicDir = "artifacts/monopoly-game/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "19806"
+BASE_PATH = "/"

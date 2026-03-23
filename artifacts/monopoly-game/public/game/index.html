@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Monopoly Online</title>
+<link rel="stylesheet" href="game.css">
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+</head>
+<body data-theme="dark">
+<canvas id="confetti-canvas"></canvas>
+
+<!-- LANDING -->
+<div id="sc-land" class="screen active">
+  <div class="logo-area">
+    <h1>🎲 Monopoly Online</h1>
+    <p>Real-time multiplayer · 27 countries · Bank · Custom boards</p>
+    <div class="online-badge"><span class="online-dot">●</span><span id="online-cnt">0 online</span></div>
+    <div id="conn-info" class="conn-info">Connecting…</div>
+  </div>
+  <div class="theme-bar">
+    <button class="tbtn active" onclick="setTheme('dark',this)" title="Dark"></button>
+    <button class="tbtn" onclick="setTheme('cyberpunk',this)" title="Cyberpunk"></button>
+    <button class="tbtn" onclick="setTheme('gold',this)" title="Gold"></button>
+    <button class="tbtn" onclick="setTheme('ocean',this)" title="Ocean"></button>
+    <button class="tbtn" onclick="setTheme('neon',this)" title="Neon"></button>
+    <button class="tbtn" onclick="setTheme('forest',this)" title="Forest"></button>
+    <button class="tbtn" onclick="setTheme('midnight',this)" title="Midnight"></button>
+    <button class="tbtn" onclick="setTheme('sakura',this)" title="Sakura"></button>
+  </div>
+  <div class="land-cards">
+    <div class="lcard">
+      <span class="ico">🏠</span><h3>Create Room</h3>
+      <p>Design your board, invite friends</p>
+      <input class="inp" id="cr-name" placeholder="Your name" maxlength="20">
+      <button class="btn btn-acc" onclick="goBoardSelect()">Choose Board & Create →</button>
+    </div>
+    <div class="lcard">
+      <span class="ico">🔗</span><h3>Join Room</h3>
+      <p>Enter a room code or paste a link</p>
+      <input class="inp" id="jr-name" placeholder="Your name" maxlength="20">
+      <input class="inp" id="jr-code" placeholder="Room code (ABC123)" maxlength="6" style="text-transform:uppercase" onkeydown="if(event.key==='Enter')joinRoom()">
+      <button class="btn btn-out" onclick="joinRoom()">Join Game</button>
+    </div>
+    <div class="lcard">
+      <span class="ico">🌍</span><h3>Online Match</h3>
+      <p>Find a public game instantly</p>
+      <input class="inp" id="qm-name" placeholder="Your name" maxlength="20">
+      <div style="display:flex;gap:.4rem">
+        <button class="btn btn-acc" style="flex:1" onclick="quickMatch()">⚡ Quick</button>
+        <button class="btn btn-out" style="flex:1" onclick="browseRooms()">🔍 Browse</button>
+      </div>
+    </div>
+    <div class="lcard lcard-editor" onclick="openEditor()">
+      <span class="ico">🗺️</span><h3>Map Editor</h3>
+      <p>Build custom boards with drag & drop</p>
+      <button class="btn btn-out" onclick="event.stopPropagation();openEditor()">Open Editor</button>
+    </div>
+  </div>
+</div>
+
+<!-- AVATAR -->
+<div id="sc-avatar" class="screen">
+  <h2 class="screen-title">🧑 Choose Your Character</h2>
+  <div class="avatar-layout">
+    <div class="avatar-preview-col">
+      <canvas id="avatar-preview" width="120" height="120"></canvas>
+      <div class="av-preview-label">Preview</div>
+    </div>
+    <div class="avatar-options-col">
+      <div class="av-section"><div class="av-label">Skin Tone</div><div class="av-row" id="av-skin"></div></div>
+      <div class="av-section"><div class="av-label">Hair Style</div><div class="av-row" id="av-hair"></div></div>
+      <div class="av-section"><div class="av-label">Hair Colour</div><div class="av-row" id="av-haircolor"></div></div>
+      <div class="av-section"><div class="av-label">Beard / Moustache</div><div class="av-row" id="av-beard"></div></div>
+      <div class="av-section"><div class="av-label">Eye Style</div><div class="av-row" id="av-eyes"></div></div>
+    </div>
+  </div>
+  <div style="display:flex;gap:.5rem;margin-top:1rem">
+    <button class="btn btn-acc" onclick="confirmAvatar()">✅ Confirm</button>
+    <button class="btn btn-out" onclick="ss(avatarReturnScreen)">← Back</button>
+  </div>
+</div>
+
+<!-- BOARD SELECT -->
+<div id="sc-boards" class="screen">
+  <h2 class="screen-title">Choose Your Board</h2>
+  <div class="btype-tabs">
+    <button class="bttab on"  onclick="setBoardType('standard',this)">🌍 Standard</button>
+    <button class="bttab"     onclick="setBoardType('worldwide',this)">🗺️ Worldwide</button>
+    <button class="bttab"     onclick="setBoardType('random',this)">🎲 Random</button>
+    <button class="bttab"     onclick="setBoardType('india',this)">🇮🇳 India</button>
+    <button class="bttab"     onclick="setBoardType('uk',this)">🇬🇧 UK</button>
+    <button class="bttab"     onclick="setBoardType('usa',this)">🇺🇸 USA</button>
+    <button class="bttab" style="border-color:var(--accent)66" onclick="openEditor()">🎨 Custom Editor</button>
+  </div>
+  <div class="boards-layout">
+    <div class="board-panel">
+      <h4>Board Size</h4>
+      <div class="size-btns">
+        <button class="szb" onclick="setSize(6,this)">6<small>28t</small></button>
+        <button class="szb" onclick="setSize(7,this)">7<small>32t</small></button>
+        <button class="szb" onclick="setSize(8,this)">8<small>36t</small></button>
+        <button class="szb on" onclick="setSize(9,this)">9<small>40t</small></button>
+        <button class="szb" onclick="setSize(10,this)">10<small>44t</small></button>
+        <button class="szb" onclick="setSize(11,this)">11<small>48t</small></button>
+        <button class="szb" onclick="setSize(12,this)">12<small>52t</small></button>
+      </div>
+      <div id="random-panel" style="display:none">
+        <div class="option-label">Mode</div>
+        <div class="rmode-btns">
+          <button class="rmode-btn on" onclick="setRMode('balanced',this)">⚖️ Balanced</button>
+          <button class="rmode-btn" onclick="setRMode('chaos',this)">🔥 Chaos</button>
+          <button class="rmode-btn" onclick="setRMode('same_country',this)">🏳️ Same Country</button>
+        </div>
+        <div style="display:flex;gap:.4rem;margin-top:.5rem">
+          <input class="inp" id="seed-inp" placeholder="Seed e.g. A3F92B" maxlength="6" style="text-transform:uppercase;flex:1">
+          <button class="btn btn-sm btn-out" onclick="rerollSeed()">🎲</button>
+        </div>
+        <div class="seed-display" id="seed-display">—</div>
+      </div>
+      <div id="worldwide-panel" style="display:none">
+        <div class="option-label">Pick Cities</div>
+        <div style="display:flex;gap:.3rem;margin-bottom:.4rem;align-items:center">
+          <button class="btn btn-sm btn-out" onclick="wwSelectAll()">All</button>
+          <button class="btn btn-sm btn-out" onclick="wwClearAll()">Clear</button>
+          <span id="ww-count" style="font-size:.72rem;color:var(--accent);flex:1;text-align:right"></span>
+        </div>
+        <div id="ww-country-list" class="country-list-wrap"></div>
+      </div>
+      <label class="tgl" style="margin-top:.8rem"><input type="checkbox" id="bs-public" checked> 🌍 Public room</label>
+    </div>
+    <div class="board-panel" style="min-width:200px">
+      <h4>Preview</h4>
+      <div class="preview-mini" id="board-preview"><span>Standard 40-tile board</span></div>
+      <div style="font-size:.75rem;color:var(--muted);text-align:center;margin-top:.3rem" id="board-info">40 tiles</div>
+      <div style="display:flex;flex-direction:column;gap:.5rem;margin-top:.8rem">
+        <input class="inp" id="bs-name" placeholder="Your name" maxlength="20">
+        <button class="btn btn-out btn-sm" onclick="openAvatarFromBoards()">🧑 Avatar</button>
+        <button class="btn btn-acc" id="create-btn" onclick="createRoom()">▶ Create Game</button>
+        <button class="btn btn-out btn-sm" onclick="ss('land')">← Back</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- MAP EDITOR -->
+<div id="sc-editor" class="screen editor-screen">
+  <div class="editor-header">
+    <div class="editor-title">🗺️ Map Editor</div>
+    <div class="editor-header-center">
+      <span id="ed-tile-count" class="ed-tile-badge">36 Tiles</span>
+      <span id="ed-country-count" class="ed-country-badge">0 countries</span>
+    </div>
+    <div class="editor-header-right">
+      <button class="btn btn-sm btn-out" onclick="editorResetBoard()">↺ Reset</button>
+      <button class="btn btn-sm btn-out" onclick="editorSaveJSON()">💾 JSON</button>
+      <input type="file" id="editor-load-file" accept=".json" style="display:none" onchange="editorLoadJSONFile(this)">
+      <button class="btn btn-sm btn-out" onclick="qid('editor-load-file').click()">📂 Load</button>
+      <button class="btn btn-sm btn-out" onclick="ss('land')">✕ Exit</button>
+    </div>
+  </div>
+  <div class="editor-body">
+    <!-- LEFT: Country Pool -->
+    <div class="editor-left">
+      <div class="editor-panel-title">Country Pool</div>
+      <input class="inp editor-search" id="editor-search" placeholder="🔍 Search countries or cities…" oninput="editorFilterCountries(this.value)">
+      <div id="editor-country-pool" class="editor-country-pool"></div>
+    </div>
+    <!-- CENTER: Board -->
+    <div class="editor-center">
+      <div class="editor-board-scroll">
+        <div id="editor-board" class="editor-board"></div>
+        <div class="editor-board-wm">MONOPOLY</div>
+      </div>
+      <div class="editor-hint" id="editor-hint">
+        <div>🖱️ Drag &amp; Drop tiles to swap · Click to see property details</div>
+        <div class="editor-hint-sub" style="color:var(--accent)">Static tiles (Corners, Airports, Railways) cannot be moved</div>
+      </div>
+      <!-- Property popup -->
+      <div id="editor-prop-popup" class="editor-prop-popup hidden">
+        <button class="editor-popup-close" onclick="closeEditorPopup()">✕</button>
+        <div id="editor-popup-content"></div>
+      </div>
+    </div>
+    <!-- RIGHT: Settings -->
+    <div class="editor-right" id="editor-right">
+      <div class="ed-section">
+        <div class="ed-section-title">BOARD SIZE</div>
+        <input type="range" id="ed-size" min="6" max="12" value="9" oninput="editorSetSize(+this.value)" class="ed-slider">
+        <div class="ed-size-info"><span id="ed-size-val" class="ed-size-badge">36 Tiles</span></div>
+        <div class="ed-hint">Includes 4 Corners + 4 Airports + Variable Static Cards</div>
+      </div>
+      <div class="ed-section">
+        <div class="ed-section-title">AUCTION MODE <span class="info-icon" title="How unclaimed properties are handled">ℹ</span></div>
+        <div class="ed-pill-row">
+          <button class="ed-pill on" onclick="editorSetAuction('none',this)">None</button>
+          <button class="ed-pill" onclick="editorSetAuction('half',this)">Half</button>
+          <button class="ed-pill" onclick="editorSetAuction('full',this)">Full</button>
+        </div>
+        <div class="ed-hint" id="auc-hint-text">Buy or Pass (No Auction)</div>
+      </div>
+      <div class="ed-section">
+        <div class="ed-section-title">CITIES PER COUNTRY</div>
+        <select class="inp" id="ed-cities-per" onchange="editorSetCitiesPerCountry(+this.value)" style="font-size:.78rem">
+          <option value="1">1 City</option>
+          <option value="2">2 Cities</option>
+          <option value="3" selected>3 Cities</option>
+          <option value="4">4 Cities</option>
+          <option value="5">5 Cities</option>
+          <option value="6">6 Cities</option>
+        </select>
+        <div class="ed-hint">You can remove individual cities after adding a country.</div>
+      </div>
+      <div class="ed-section">
+        <div class="ed-section-title">HOUSING RULES</div>
+        <select class="inp" id="ed-housing" onchange="editorSetHousing(this.value)" style="font-size:.78rem;margin-bottom:.5rem">
+          <option value="monopoly">Monopoly Required (Standard)</option>
+          <option value="free">Free Build</option>
+          <option value="none">No Building</option>
+        </select>
+        <div class="ed-hint" id="ed-housing-hint">Must own all properties in a colour group to build.</div>
+        <div class="ed-toggle-card">
+          <span>🏗️ Even Build</span>
+          <label class="toggle-sw"><input type="checkbox" id="ed-evenbuild" checked onchange="editorSetToggle('evenBuild',this.checked)"><span class="toggle-knob"></span></label>
+        </div>
+        <div class="ed-hint" style="margin-bottom:.4rem">Must build evenly across properties. Cannot add 2nd house until all have 1.</div>
+        <div class="ed-toggle-card">
+          <span>🏦 Mortgage</span>
+          <label class="toggle-sw"><input type="checkbox" id="ed-mortgage" checked onchange="editorSetToggle('mortgageEnabled',this.checked)"><span class="toggle-knob"></span></label>
+        </div>
+        <div class="ed-hint">50% value | Unmortgage +10% cost. Cannot mortgage with houses. Disabled during auctions.</div>
+      </div>
+      <div class="ed-section">
+        <div class="ed-section-title">PRICING MODEL</div>
+        <select class="inp" id="ed-pricing" onchange="editorSetPricing(this.value)" style="font-size:.78rem">
+          <option value="standard">Standard</option>
+          <option value="double">Double Stakes</option>
+          <option value="halfprice">Half Price</option>
+          <option value="tiered">Tier-Weighted</option>
+        </select>
+        <div class="ed-hint" id="ed-pricing-hint">Balanced economy similar to classic board games.</div>
+      </div>
+      <div class="ed-section">
+        <div class="ed-section-title">HOUSING MULTIPLIER</div>
+        <input type="range" id="ed-hmult" min="1" max="4" step="0.25" value="2" oninput="editorSetHMult(+this.value)" class="ed-slider">
+        <div class="ed-hint"><span id="ed-hmult-val">2×</span> Rent Gap between no-house and hotel</div>
+      </div>
+      <div class="ed-section">
+        <div class="ed-section-title">ECONOMY</div>
+        <div class="ed-row"><label>Starting Cash</label><input class="inp ed-num" id="ed-startcash" type="number" value="1500" step="100" onchange="editorSetSetting('startingCash',+this.value)"></div>
+        <div class="ed-row"><label>Pass GO Salary</label><input class="inp ed-num" id="ed-gosalary" type="number" value="200" step="50" onchange="editorSetSetting('goSalary',+this.value)"></div>
+        <div class="ed-row"><label>Treasure Pot</label><label class="toggle-sw sm"><input type="checkbox" id="ed-pot" checked onchange="editorSetToggle('treasurePot',this.checked)"><span class="toggle-knob"></span></label></div>
+        <div class="ed-row"><label>Tax Rate (%)</label><input class="inp ed-num" id="ed-taxrate" type="number" value="10" onchange="editorSetSetting('incomeTaxRate',+this.value)"></div>
+        <div class="ed-row"><label>Airport Fee</label><input class="inp ed-num" id="ed-airportfee" type="number" value="100" step="10" onchange="editorSetSetting('airportFee',+this.value)"></div>
+        <div class="ed-row"><label>Railway Fee</label><input class="inp ed-num" id="ed-railfee" type="number" value="75" step="10" onchange="editorSetSetting('railwayFee',+this.value)"></div>
+      </div>
+      <div class="ed-section">
+        <div class="ed-section-title">RULES</div>
+        <div class="ed-row"><label>No Rent in Jail</label><label class="toggle-sw sm"><input type="checkbox" id="ed-norentjail" checked onchange="editorSetToggle('noRentInJail',this.checked)"><span class="toggle-knob"></span></label></div>
+        <div class="ed-row"><label>Very Bad Surprises</label><label class="toggle-sw sm"><input type="checkbox" id="ed-verybad" checked onchange="editorSetToggle('enableVeryBadSurprises',this.checked)"><span class="toggle-knob"></span></label></div>
+        <div class="ed-row"><label>Very Good Surprises</label><label class="toggle-sw sm"><input type="checkbox" id="ed-verygood" checked onchange="editorSetToggle('enableVeryGoodSurprises',this.checked)"><span class="toggle-knob"></span></label></div>
+      </div>
+      <div class="ed-section">
+        <div class="ed-section-title">LOBBY</div>
+        <div class="ed-row"><label>Max Players</label><input class="inp ed-num" id="ed-maxplayers" type="number" value="6" min="2" max="8" onchange="editorSetSetting('maxPlayers',+this.value)"></div>
+        <div class="ed-row"><label>Private Room</label><label class="toggle-sw sm"><input type="checkbox" id="ed-private" onchange="editorSetToggle('privateRoom',this.checked)"><span class="toggle-knob"></span></label></div>
+      </div>
+      <div class="ed-section ed-launch">
+        <div class="ed-name-row">
+          <input class="inp" id="ed-name" placeholder="Your name" maxlength="20">
+          <button class="btn btn-sm btn-out" onclick="openAvatarFromEditor()">🧑</button>
+        </div>
+        <button class="btn btn-acc ed-launch-btn" onclick="editorLaunchGame(false)">🌍 Public Game</button>
+        <button class="btn btn-out ed-launch-btn" onclick="editorLaunchGame(true)">🔒 Private Game</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- LOBBY -->
+<div id="sc-lobby" class="screen" style="flex-direction:column;align-items:center;overflow-y:auto;padding:1.5rem;gap:1rem">
+  <h2 class="screen-title">🎲 Game Lobby</h2>
+  <div class="share-box">
+    <span>🔗</span><span id="share-url" class="share-url">—</span>
+    <button class="btn btn-sm btn-out" onclick="copyLink()">Copy</button>
+  </div>
+  <div style="display:flex;gap:1rem;flex-wrap:wrap;justify-content:center;width:100%;max-width:800px">
+    <div class="lbox"><h3>Players</h3><div id="lobby-players"></div></div>
+    <div class="lbox"><h3>Settings</h3><div id="lobby-settings"></div></div>
+  </div>
+  <div style="display:flex;gap:.55rem;flex-wrap:wrap;justify-content:center">
+    <button class="btn btn-out" onclick="openSetup()">⚙️ Rules</button>
+    <button class="btn btn-acc" id="start-btn" onclick="startGame()" style="display:none">▶ Start Game</button>
+  </div>
+  <div class="lbox" style="width:100%;max-width:500px">
+    <h3>Chat</h3>
+    <div id="lobby-chat-log" style="max-height:100px;overflow-y:auto;margin-bottom:.4rem"></div>
+    <div class="chat-bar">
+      <input type="text" id="lc-inp" class="inp" placeholder="Chat…" maxlength="200" onkeydown="if(event.key==='Enter')sendChat()">
+      <button class="btn btn-sm btn-out" onclick="sendChat()">→</button>
+    </div>
+  </div>
+</div>
+
+<!-- GAME -->
+<div id="sc-game" class="screen game-layout">
+  <div id="turn-banner"></div>
+  <div class="gl-left">
+    <div class="panel-hdr"><span>📋 My Properties</span><span id="my-prop-count" style="color:var(--accent);font-size:.72rem"></span></div>
+    <div id="panel-props" class="panel-scroll"></div>
+    <div class="panel-hdr" style="border-top:1px solid var(--border)">💬 Chat</div>
+    <div class="gl-chat">
+      <div id="chat-log" class="chat-log"></div>
+      <div class="chat-bar">
+        <input type="text" id="chat-inp" placeholder="Message…" maxlength="200" onkeydown="if(event.key==='Enter')sendChat()">
+        <button class="btn btn-sm btn-out" onclick="sendChat()">→</button>
+      </div>
+    </div>
+  </div>
+  <div class="gl-center">
+    <div class="game-area" id="game-area">
+      <div class="board-wrap" id="board-wrap">
+        <div class="board" id="game-board"></div>
+        <div class="board-wm">MONOPOLY</div>
+      </div>
+      <div class="dice-over dh" id="dice-over">
+        <div class="dice-row"><div class="die" id="d1">⚀</div><div class="die" id="d2">⚀</div></div>
+        <div class="dice-hint">Roll to move</div>
+      </div>
+    </div>
+    <div id="action-bar">
+      <div id="turn-box" class="turn-box">Loading…</div>
+      <div id="ablist" class="ablist"></div>
+    </div>
+  </div>
+  <div class="gl-right">
+    <div class="panel-hdr">👥 Players</div>
+    <div id="panel-players" class="panel-scroll" style="max-height:230px"></div>
+    <div class="panel-hdr" style="border-top:1px solid var(--border)">💱 Trade</div>
+    <div id="panel-trade" class="panel-scroll" style="flex:1;min-height:0">
+      <div id="trade-player-list"></div>
+      <div id="trade-expanded" style="display:none"></div>
+    </div>
+    <div class="panel-hdr" style="border-top:1px solid var(--border)">🏦 Bank</div>
+    <div id="panel-bank" style="flex-shrink:0;overflow-y:auto;max-height:220px">
+      <div class="bank-mini-tabs">
+        <button class="bmt on" onclick="bmtab('dep',this)" title="Deposit">💰</button>
+        <button class="bmt" onclick="bmtab('loans',this)" title="Loans">💸</button>
+        <button class="bmt" onclick="bmtab('cc',this)" title="Credit">💳</button>
+        <button class="bmt" onclick="bmtab('ins',this)" title="Insurance">🛡️</button>
+      </div>
+      <div id="bm-dep"   class="bank-sec on"></div>
+      <div id="bm-loans" class="bank-sec"></div>
+      <div id="bm-cc"    class="bank-sec"></div>
+      <div id="bm-ins"   class="bank-sec"></div>
+    </div>
+  </div>
+</div>
+
+<!-- MODALS -->
+<div class="ov ovh" id="m-setup">  <div class="modal xwide"><button class="mc" onclick="cm('m-setup')">✕</button><h2>⚙️ Rules</h2><div id="setup-c"></div></div></div>
+<div class="ov ovh" id="m-prop">   <div class="modal"><button class="mc" onclick="cm('m-prop')">✕</button><div id="prop-c"></div></div></div>
+<div class="ov ovh" id="m-trav">   <div class="modal"><button class="mc" onclick="cm('m-trav')">✕</button><div id="trav-c"></div></div></div>
+<div class="ov ovh" id="m-rail">   <div class="modal"><button class="mc" onclick="cm('m-rail')">✕</button><div id="rail-c"></div></div></div>
+<div class="ov ovh" id="m-build">  <div class="modal"><button class="mc" onclick="cm('m-build')">✕</button><div id="build-c"></div></div></div>
+<div class="ov ovh" id="m-mort">   <div class="modal"><button class="mc" onclick="cm('m-mort')">✕</button><div id="mort-c"></div></div></div>
+<div class="ov ovh" id="m-surp">   <div class="modal"><button class="mc" onclick="handleSurpriseClose()">✕</button><div id="surp-c"></div></div></div>
+<div class="ov ovh" id="m-gov">    <div class="modal"><button class="mc" onclick="ga('gov_ack');cm('m-gov')">✕</button><div id="gov-c"></div></div></div>
+<div class="ov ovh" id="m-win">    <div class="modal"><div id="win-c"></div></div></div>
+<div class="ov ovh" id="m-t-in">   <div class="modal wide"><button class="mc" onclick="declineTrade()">✕</button><div id="tin-c"></div></div></div>
+<div class="ov ovh" id="m-neg">    <div class="modal wide"><button class="mc" onclick="cm('m-neg')">✕</button><h2>🔄 Counter Offer</h2><div id="neg-c"></div></div></div>
+<div class="ov ovh" id="m-browse"> <div class="modal wide"><button class="mc" onclick="closeBrowse()">✕</button><h2>🔍 Browse Games</h2><div id="browse-c"></div></div></div>
+<div class="ov ovh" id="m-auction"><div class="modal wide"><div id="auction-c"></div></div></div>
+
+<div class="ov ovh" id="m-votekick"><div class="modal"><button class="mc" onclick="cm('m-votekick')">✕</button><div id="votekick-c"></div></div></div>
+
+<script src="game.js"></script>
+</body>
+</html>
