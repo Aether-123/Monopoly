@@ -929,7 +929,7 @@ def generate_domestic_board(preset, S):
     return board
 
 def get_countries_list():
-    return [{"code":c["code"],"name":c["name"],"flag":c["flag"],"tier":c["tier"],"cities":c["cities"]} for c in COUNTRIES]
+    return [{"code":c["code"],"name":c["name"],"flag":c["flag"],"tier":c["tier"],"base":c["base"],"cities":c["cities"]} for c in COUNTRIES]
 
 def get_domestic_maps():
     return {k:{"name":v["name"],"flag":v["flag"],"states":[{"name":s["name"],"cities":s["cities"]} for s in v["states"]]} for k,v in DOMESTIC_MAPS.items()}

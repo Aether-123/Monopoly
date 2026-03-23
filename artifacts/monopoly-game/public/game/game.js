@@ -27,7 +27,7 @@ const EYE_STYLES  =["normal","wide","sleepy","sunglasses","wink"];
 /* ─── EDITOR STATE ─────────────────────────────────────── */
 let editorBoard=[];
 let editorSize=9;
-let editorCountries=[]; // loaded from /api/countries
+let editorCountries=[]; // loaded from /mapi/countries
 let editorSettings={
   auctionMode:"none",citiesPerCountry:3,housingRule:"monopoly",
   evenBuild:true,mortgageEnabled:true,pricingModel:"standard",housingMultiplier:2,
@@ -340,10 +340,10 @@ function flashTile(pos){
 
 /* ─── BOARD GEOMETRY ────────────────────────────────────── */
 function getBoardDims(S){
-  const cPx=100;
+  const cPx=120;
   const areaEl=qid("game-area");
-  const avail=areaEl?Math.min(areaEl.offsetWidth-24,areaEl.offsetHeight-80)-cPx*2:500;
-  const tPx=Math.min(88,Math.max(50,Math.floor(avail/S)));
+  const avail=areaEl?Math.min(areaEl.offsetWidth-24,areaEl.offsetHeight-80)-cPx*2:600;
+  const tPx=Math.min(96,Math.max(54,Math.floor(avail/S)));
   return{cPx,tPx};
 }
 function gridPos(pos,S){
@@ -404,10 +404,6 @@ function renderBoard(){
   }
   board.innerHTML="";
 
-  const GC={
-    0:"#b91c1c",1:"#92400e",2:"#15803d",3:"#1d4ed8",
-    4:"#7c3aed",5:"#be185d",6:"#0f766e",7:"#1e40af"
-  };
   const ICONS={
     airport:"✈️",railway:"🚂",gov_prot:"🏛️",chest:"📦",
     chance:"❓",income_tax:"💰",property_tax:"🏠",
@@ -447,17 +443,16 @@ function renderBoard(){
       div.style.background=c.bg;
       div.innerHTML=`<div class="ci"><span class="ci-ico">${c.ico}</span><span class="ci-lbl">${c.lbl}</span></div>`;
     }else{
-      // Determine strip color and icon
-      const gi=sp?.group?parseInt(sp.group.slice(1)):-1;
-      const stripColor=gi>=0?GC[gi]:null;
-
       let ico=isHaz?"☠️":isTR?"📋":isRT?"🎲":(ICONS[sp?.type]||sp?.countryFlag||"🏙️");
 
-      // Ownership dot
+      // Owner: colored border glow + ownership dot — only when owned
       let ownerDot="";
       if(sp?.owner){
         const o=gs.players.find(p=>p.id===sp.owner);
-        if(o)ownerDot=`<div class="own-dot" style="background:${o.color}"></div>`;
+        if(o){
+          ownerDot=`<div class="own-dot" style="background:${o.color}"></div>`;
+          div.style.boxShadow=`inset 0 0 0 2px ${o.color}, 0 0 8px ${o.color}55`;
+        }
       }
 
       // Houses
@@ -467,15 +462,9 @@ function renderBoard(){
       // 2x badge
       const badge2x=hasFullSet&&h===0?'<div class="set-2x-badge">2×</div>':"";
 
-      // Group tint background
-      if(stripColor&&!isHaz&&!isTR&&!isRT){
-        div.style.background=`color-mix(in srgb,${stripColor} 8%,var(--card))`;
-      }
-
       const priceHTML=sp?.price?`<div class="sp-pr">${CUR()}${sp.price}</div>`:"";
-      const stripHTML=stripColor?`<div class="sp-band" style="background:${stripColor}"></div>`:"";
 
-      div.innerHTML=`${stripHTML}<div class="sp-body"><div class="sp-ico">${ico}</div><div class="sp-nm">${sp?.name||""}</div>${priceHTML}</div>${housesHTML}${ownerDot}${badge2x}`;
+      div.innerHTML=`<div class="sp-body"><div class="sp-ico">${ico}</div><div class="sp-nm">${sp?.name||""}</div>${priceHTML}</div>${housesHTML}${ownerDot}${badge2x}`;
     }
     board.appendChild(div);
   }
@@ -742,6 +731,122 @@ function bmtab(id,btn){
   btn.classList.add("on");qid("bm-"+id).classList.add("on");
 }
 
+/* ─── BANK MODAL ─────────────────────────────────────────── */
+function openBankModal(){
+  renderBankModal();
+  om("m-bank");
+}
+function bktab(id,btn){
+  document.querySelectorAll(".bk-tab").forEach(b=>b.classList.remove("on"));
+  document.querySelectorAll(".bk-sec").forEach(s=>s.classList.remove("on"));
+  btn.classList.add("on");qid("bk-"+id).classList.add("on");
+}
+function renderBankModal(){
+  const me=gs?.players.find(p=>p.id===myId);if(!me||!gs)return;
+  const s=gs.settings,cur=s.currency||"$";
+  const dep=me.bankDeposit+(me.bankDepositInterest||0);
+  const totalLoan=me.loans?.reduce((a,l)=>a+l.remaining,0)||0;
+
+  qid("bk-dep").innerHTML=`
+    <div class="bk-stat-row">
+      <div class="bk-stat"><span class="bk-stat-lbl">Balance Deposited</span><span class="bk-stat-val">${cur}${me.bankDeposit}</span></div>
+      <div class="bk-stat"><span class="bk-stat-lbl">Accrued Interest</span><span class="bk-stat-val" style="color:var(--teal)">${cur}${me.bankDepositInterest||0}</span></div>
+      <div class="bk-stat"><span class="bk-stat-lbl">Total Available</span><span class="bk-stat-val" style="color:var(--green)">${cur}${dep}</span></div>
+      <div class="bk-stat"><span class="bk-stat-lbl">Rate</span><span class="bk-stat-val">${s.depositRate}%/round</span></div>
+    </div>
+    <div class="bk-action-row">
+      <label class="bk-action-lbl">Deposit Amount</label>
+      <div style="display:flex;gap:.4rem">
+        <input type="number" id="bkd-dep-a" value="100" min="1" max="${me.money}" step="50" class="inp" style="flex:1">
+        <button class="btn btn-blu" onclick="ga('bank_deposit',{amount:+qid('bkd-dep-a').value});cm('m-bank')">💰 Deposit</button>
+      </div>
+    </div>
+    ${dep>0?`<div class="bk-action-row">
+      <label class="bk-action-lbl">Withdraw Amount</label>
+      <div style="display:flex;gap:.4rem">
+        <input type="number" id="bkd-wit-a" value="${dep}" min="1" max="${dep}" step="50" class="inp" style="flex:1">
+        <button class="btn btn-grn" onclick="ga('bank_withdraw',{amount:+qid('bkd-wit-a').value});cm('m-bank')">💵 Withdraw</button>
+      </div>
+    </div>`:""}
+    <div class="bk-note">Deposits earn ${s.depositRate}% interest each time you pass GO. Withdraw anytime.</div>`;
+
+  qid("bk-loans").innerHTML=`
+    <div class="bk-stat-row">
+      <div class="bk-stat"><span class="bk-stat-lbl">Total Debt</span><span class="bk-stat-val" style="color:${totalLoan>0?"var(--red)":"var(--green)"}">${cur}${totalLoan}</span></div>
+      <div class="bk-stat"><span class="bk-stat-lbl">Loan Rate</span><span class="bk-stat-val">${s.loanRate}%/round</span></div>
+      <div class="bk-stat"><span class="bk-stat-lbl">Your Cash</span><span class="bk-stat-val">${cur}${me.money}</span></div>
+      <div class="bk-stat"><span class="bk-stat-lbl">Max Loan</span><span class="bk-stat-val">${cur}5000</span></div>
+    </div>
+    ${me.loans?.length?`<div class="bk-loans-list">
+      ${me.loans.map((l,i)=>`<div class="bk-loan-card${l.turnsLeft<=2?" bk-loan-urgent":""}">
+        <div class="bk-loan-info">
+          <span>Loan ${i+1}</span>
+          <span style="font-size:.75rem;color:var(--muted)">${l.turnsLeft} round${l.turnsLeft!==1?"s":""} left</span>
+        </div>
+        <div class="bk-loan-balance">${cur}${l.remaining}</div>
+        <div class="bk-loan-btns">
+          ${[100,250,500].filter(a=>a<=l.remaining&&a<=me.money).map(a=>`<button class="btn btn-sm btn-out" onclick="ga('bank_repay',{loanId:'${l.id}',amount:${a}});renderBankModal()">Pay ${cur}${a}</button>`).join("")}
+          ${me.money>=l.remaining?`<button class="btn btn-sm btn-grn" onclick="ga('bank_repay',{loanId:'${l.id}',amount:${l.remaining}});cm('m-bank')">✅ Pay All</button>`:""}
+        </div>
+      </div>`).join("")}
+    </div>`:"<div class='bk-note'>No active loans.</div>"}
+    <div class="bk-action-row">
+      <label class="bk-action-lbl">New Loan</label>
+      <div style="display:flex;gap:.4rem;flex-wrap:wrap">
+        <input type="number" id="bkd-loan-a" value="500" min="100" max="5000" step="100" class="inp" style="flex:1;min-width:80px">
+        <select id="bkd-loan-t" class="inp" style="width:auto"><option value="4">4 rounds</option><option value="6" selected>6 rounds</option><option value="8">8 rounds</option><option value="12">12 rounds</option></select>
+        <button class="btn btn-blu" onclick="ga('bank_loan',{amount:+qid('bkd-loan-a').value,tenure:+qid('bkd-loan-t').value});cm('m-bank')">💸 Take Loan</button>
+      </div>
+    </div>
+    <div class="bk-note">⚠️ Unpaid loans accrue ${s.loanRate}% each round. Defaulting after 3 rounds marks you as bad debt.</div>`;
+
+  const cc=me.creditCard;
+  qid("bk-cc").innerHTML=cc?.active?`
+    <div class="bk-cc-card">
+      <div class="bk-cc-chip">💳</div>
+      <div class="bk-cc-name">${me.name}</div>
+      <div class="bk-cc-limit">${cur}${cc.limit} LIMIT</div>
+    </div>
+    <div class="bk-stat-row" style="margin-top:.7rem">
+      <div class="bk-stat"><span class="bk-stat-lbl">Credit Used</span><span class="bk-stat-val" style="color:var(--orange)">${cur}${cc.used}</span></div>
+      <div class="bk-stat"><span class="bk-stat-lbl">Available</span><span class="bk-stat-val" style="color:var(--green)">${cur}${cc.limit-cc.used}</span></div>
+      <div class="bk-stat"><span class="bk-stat-lbl">EMI / GO</span><span class="bk-stat-val">${cur}${cc.emi}</span></div>
+      <div class="bk-stat"><span class="bk-stat-lbl">Rounds Left</span><span class="bk-stat-val">${Math.ceil(cc.roundsLeft||0)}</span></div>
+    </div>
+    <div class="bk-cc-bar-wrap"><div class="bk-cc-bar" style="width:${Math.min(100,Math.round(cc.used/cc.limit*100))}%"></div></div>
+    ${me.money>=cc.emi?`<button class="btn btn-pur" style="width:100%;margin-top:.6rem" onclick="ga('bank_pay_emi');renderBankModal()">💳 Pay EMI — ${cur}${cc.emi}</button>`:`<div class="bk-note" style="color:var(--red)">⚠️ Insufficient funds to pay EMI (${cur}${cc.emi} needed).</div>`}`:`
+    <div class="bk-cc-empty">
+      <div style="font-size:2.5rem;margin-bottom:.5rem">💳</div>
+      <div style="font-size:.9rem;font-weight:700;margin-bottom:.3rem">No Credit Card</div>
+      <div class="bk-note">Fee: ${cur}${s.creditCardFee} · Limit: ${cur}${s.creditCardLimit}</div>
+    </div>
+    <div class="bk-action-row">
+      <label class="bk-action-lbl">Repayment Tenure</label>
+      <div style="display:flex;gap:.4rem">
+        <select id="bkd-cc-t" class="inp" style="flex:1"><option value="3">3 rounds</option><option value="6" selected>6 rounds</option><option value="9">9 rounds</option></select>
+        <button class="btn btn-pur" onclick="ga('bank_credit',{tenure:+qid('bkd-cc-t').value});cm('m-bank')">Get Card</button>
+      </div>
+    </div>`;
+
+  qid("bk-ins").innerHTML=me.hasInsurance?`
+    <div class="bk-ins-active">
+      <div style="font-size:3rem">🛡️</div>
+      <div style="font-size:1rem;font-weight:800;color:var(--green);margin:.3rem 0">Insurance Active</div>
+      <div class="bk-note">Covers ${s.insurancePayout}% of hazard losses. Premium: ${cur}${s.insurancePremium} per GO pass.</div>
+    </div>
+    ${(me.pendingHazardLoss||0)+(me.pendingHazardRebuildCost||0)>0?`
+      <div class="bk-action-row">
+        <button class="btn btn-grn" style="width:100%" onclick="ga('claim_insurance');cm('m-bank')">🛡️ Claim Insurance — ${cur}${Math.floor(((me.pendingHazardLoss||0)+(me.pendingHazardRebuildCost||0))*(s.insurancePayout/100))}</button>
+      </div>
+    `:`<div class="bk-note" style="margin-top:.5rem">No pending claims at this time.</div>`}`:`
+    <div class="bk-ins-empty">
+      <div style="font-size:3rem;margin-bottom:.5rem">🛡️</div>
+      <div style="font-size:.9rem;font-weight:700;margin-bottom:.3rem">No Insurance</div>
+      <div class="bk-note">One-time premium of ${cur}${s.insurancePremium||150}. Covers ${s.insurancePayout}% of losses from hazard tiles.</div>
+    </div>
+    ${me.money>=( s.insurancePremium||150)?`<button class="btn btn-grn" style="width:100%;margin-top:.8rem" onclick="ga('bank_insurance');cm('m-bank')">🛡️ Buy Insurance — ${cur}${s.insurancePremium||150}</button>`:`<div class="bk-note" style="color:var(--red)">Need ${cur}${(s.insurancePremium||150)-me.money} more to afford insurance.</div>`}`;
+}
+
 /* ─── ACTION BAR ─────────────────────────────────────────── */
 let _bannerTimer=null;
 function showTurnBanner(name){
@@ -848,58 +953,66 @@ function renderAuctionModal(){
   const gi=sp?.group?parseInt(sp.group.slice(1)):-1;
   const gc=gi>=0?GRP_COLORS[gi]:"#888";
   const ps=auc.propertySnapshot||{};
+  const CIRC=100;
   qid("auction-c").innerHTML=`
-    <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.6rem">
-      <div style="width:14px;height:14px;border-radius:50%;background:${gc}"></div>
-      <h2 style="margin:0;font-size:1rem">🔨 Auction: ${sp?.countryFlag||ps.countryFlag||""}${sp?.name||ps.name}</h2>
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.6rem;margin-bottom:.7rem">
-      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:.6rem">
-        <div style="font-size:.65rem;color:var(--muted);margin-bottom:.3rem">PROPERTY INFO</div>
-        <div style="font-size:.75rem">Price: <b>${CUR()}${ps.price||sp?.price||0}</b></div>
-        <div style="font-size:.75rem">Sell: <b>${CUR()}${Math.floor((ps.price||sp?.price||0)/2)}</b></div>
-        ${ps.rents?ps.rents.map((r,i)=>{const l=["Base","1🏠","2🏠","3🏠","4🏠","🏨"][i];return`<div style="font-size:.68rem;display:flex;justify-content:space-between"><span>${l}</span><b>${CUR()}${r}</b></div>`;}).join(""):""}
-        ${ps.houses?`<div style="font-size:.72rem;color:var(--orange);margin-top:.2rem">Houses on it: ${ps.houses}</div>`:""}
-        ${ps.stateName?`<div style="font-size:.65rem;color:var(--muted)">📍 ${ps.stateName}</div>`:""}
-        ${ps.countryName?`<div style="font-size:.65rem;color:var(--muted)">🌍 ${ps.countryName}</div>`:""}
+    <div class="auc-header">
+      <div style="display:flex;align-items:center;gap:.5rem">
+        <div style="width:12px;height:12px;border-radius:50%;background:${gc};flex-shrink:0"></div>
+        <span style="font-size:.95rem;font-weight:700">🔨 ${sp?.countryFlag||ps.countryFlag||""}${sp?.name||ps.name||"Auction"}</span>
       </div>
-      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:.6rem">
-        <div style="font-size:.65rem;color:var(--muted);margin-bottom:.3rem">AUCTION STATUS</div>
-        <div style="font-size:1.5rem;font-weight:900;color:var(--accent)">${CUR()}${auc.currentBid}</div>
-        <div style="font-size:.72rem;color:${iAmHigh?"var(--green)":"var(--muted)"}">${highBidder?`Leading: ${highBidder.name}`:"No bids yet"}</div>
-        <div style="margin-top:.4rem;font-size:.72rem;color:var(--muted)">Your cash: ${CUR()}${me?.money||0}</div>
-        <div style="font-size:.65rem;color:var(--muted)">Folded: ${auc.folded?.length||0}</div>
-        <div id="auc-timer" style="font-size:1.1rem;font-weight:800;color:var(--orange);margin-top:.3rem"></div>
+      <div class="auc-ring-wrap">
+        <svg class="auc-ring" viewBox="0 0 36 36">
+          <circle class="auc-ring-bg" cx="18" cy="18" r="15.9"/>
+          <circle class="auc-ring-fill" id="auc-ring-c" cx="18" cy="18" r="15.9" stroke-dasharray="${CIRC} ${CIRC}" stroke-dashoffset="0"/>
+        </svg>
+        <div class="auc-ring-lbl" id="auc-timer">10</div>
       </div>
     </div>
-    <div style="margin-bottom:.5rem;max-height:80px;overflow-y:auto">
-      ${auc.bidHistory?.slice(-5).reverse().map(b=>`<div style="font-size:.7rem;padding:.15rem 0;border-bottom:1px solid var(--border)22"><b>${b.playerName}</b> bid <b style="color:var(--accent)">${CUR()}${b.amount}</b></div>`).join("")||`<div style="font-size:.7rem;color:var(--muted)">No bids yet — base price: ${CUR()}${auc.basePrice}</div>`}
+    <div class="auc-bid-center">
+      <div class="auc-cur-bid">${CUR()}${auc.currentBid||0}</div>
+      <div class="auc-cur-bidder" style="color:${iAmHigh?"var(--green)":"var(--muted)"}">
+        ${highBidder?`${iAmHigh?"🏆 You lead":"Leading:"} ${highBidder.name}`:"No bids yet — starting at "+CUR()+(auc.basePrice||0)}
+      </div>
+      <div style="font-size:.72rem;color:var(--muted);margin-top:.25rem">Your cash: ${CUR()}${me?.money||0} · Folded: ${auc.folded?.length||0}/${gs.players.filter(p=>!p.bankrupted).length}</div>
+    </div>
+    <div class="auc-prop-strip">
+      <span>List price: <b>${CUR()}${ps.price||sp?.price||0}</b></span>
+      ${ps.rents?`<span>Base rent: <b>${CUR()}${ps.rents[0]||0}</b></span>`:""}
+      ${ps.stateName?`<span>📍 ${ps.stateName}</span>`:""}
+    </div>
+    <div class="auc-history">
+      ${auc.bidHistory?.length?auc.bidHistory.slice(-6).reverse().map((b,i)=>`<div class="auc-hist-row${i===0?" auc-hist-latest":""}"><b>${b.playerName}</b> bid <b style="color:var(--accent)">${CUR()}${b.amount}</b></div>`).join(""):`<div style="font-size:.72rem;color:var(--muted);text-align:center">No bids yet — start bidding!</div>`}
     </div>
     ${!myFolded?`
-    <div style="display:flex;gap:.35rem;flex-wrap:wrap;margin-bottom:.4rem">
-      <button class="btn btn-grn btn-sm" onclick="auctionBid(${auc.currentBid+10})">+${CUR()}10</button>
-      <button class="btn btn-grn btn-sm" onclick="auctionBid(${auc.currentBid+50})">+${CUR()}50</button>
-      <button class="btn btn-grn btn-sm" onclick="auctionBid(${auc.currentBid+100})">+${CUR()}100</button>
+    <div class="auc-bid-btns">
+      <button class="btn btn-grn" onclick="auctionBid(${auc.currentBid+10})">+${CUR()}10</button>
+      <button class="btn btn-grn" onclick="auctionBid(${auc.currentBid+50})">+${CUR()}50</button>
+      <button class="btn btn-grn" onclick="auctionBid(${auc.currentBid+100})">+${CUR()}100</button>
     </div>
-    <div style="display:flex;gap:.35rem">
-      <input type="number" id="auc-custom" class="inp" value="${auc.currentBid+20}" min="${auc.currentBid+1}" style="flex:1;font-size:.75rem">
-      <button class="btn btn-acc btn-sm" onclick="auctionCustomBid2()">Bid</button>
-      <button class="btn btn-red btn-sm" onclick="auctionFold()">🏳️ Fold</button>
-    </div>`:`<div style="font-size:.78rem;color:var(--muted);text-align:center;padding:.4rem">You folded from this auction</div>`}`;
+    <div style="display:flex;gap:.4rem;margin-top:.4rem">
+      <input type="number" id="auc-custom" class="inp" value="${auc.currentBid+20}" min="${auc.currentBid+1}" style="flex:1">
+      <button class="btn btn-acc" onclick="auctionCustomBid2()">Custom Bid</button>
+      <button class="btn btn-red" onclick="auctionFold()">🏳️ Fold</button>
+    </div>`:`<div class="auc-folded-msg">You folded — watching the auction</div>`}`;
   om("m-auction");
   startAuctionTimerDisplay();
 }
 
 function auctionCustomBid2(){const v=+qid("auc-custom")?.value;if(v)auctionBid(v);}
 
+const AUC_SECS=10,AUC_CIRC=100;
 let _aucDisplayTimer=null;
 function startAuctionTimerDisplay(){
   stopAuctionTimer();
-  _auctionSecsLeft=10;
+  _auctionSecsLeft=AUC_SECS;
   _aucDisplayTimer=setInterval(()=>{
-    _auctionSecsLeft--;
+    _auctionSecsLeft=Math.max(0,_auctionSecsLeft-1);
     const el=qid("auc-timer");
-    if(el)el.textContent=_auctionSecsLeft>0?`⏱ ${_auctionSecsLeft}s`:"⏱ Closing…";
+    const ring=qid("auc-ring-c");
+    const pct=_auctionSecsLeft/AUC_SECS;
+    const offset=AUC_CIRC*(1-pct);
+    if(el)el.textContent=_auctionSecsLeft>0?`${_auctionSecsLeft}`:"!";
+    if(ring){ring.style.strokeDashoffset=offset;ring.style.stroke=_auctionSecsLeft<=3?"var(--red)":_auctionSecsLeft<=6?"var(--orange)":"var(--green)";}
     if(_auctionSecsLeft<=0)stopAuctionTimer();
   },1000);
 }
@@ -917,42 +1030,75 @@ function showBankruptAuctionModal(){
 function handlePendingEvent(){
   if(!gs?.pendingEvent)return;
   const ev=gs.pendingEvent;
-  if(ev.type==="surprise"||ev.type==="hazard")showSurpriseModal(ev);
+  if(ev.type==="hazard")showHazardModal(ev);
+  else if(ev.type==="surprise")showSurpriseModal(ev);
   if(ev.type==="gov_prot")showGovModal(ev);
   if(ev.type==="tax_return")toast(`📋 Tax Return! ${ev.message}`);
 }
 function handleSurpriseClose(){ga("hazard_ack");cm("m-surp");}
 
+function showHazardModal(ev){
+  const h=ev.hazard||{};
+  const me=gs?.players.find(p=>p.id===myId);
+  const s=gs?.settings||{};
+  const lostMoney=ev.lostMoney||0;
+  const lostHouses=ev.lostHouses||0;
+  const hasIns=me?.hasInsurance;
+  const pending=(me?.pendingHazardLoss||0)+(me?.pendingHazardRebuildCost||0);
+  const claimAmt=pending>0?Math.floor(pending*(s.insurancePayout||80)/100):0;
+  qid("haz-c").innerHTML=`
+    <div class="haz-card card-reveal">
+      <div class="haz-icon">${h.icon||"⚠️"}</div>
+      <div class="haz-title">${h.name||"Hazard!"}</div>
+      <div class="haz-desc">${h.desc||""}</div>
+      ${lostMoney>0?`<div class="haz-loss">-${CUR()}${lostMoney}</div>`:""}
+      ${lostHouses>0?`<div class="haz-houses">🏚️ ${lostHouses} structure${lostHouses!==1?"s":""} demolished</div>`:""}
+    </div>
+    ${hasIns&&claimAmt>0?`<button class="btn btn-grn" style="width:100%;margin-top:.6rem" onclick="ga('claim_insurance');ga('hazard_ack');cm('m-haz')">🛡️ Claim Insurance (${CUR()}${claimAmt})</button>`:""}
+    <button class="btn btn-acc" style="width:100%;margin-top:.45rem" onclick="ga('hazard_ack');cm('m-haz')">Continue →</button>`;
+  om("m-haz");
+}
+
 function showSurpriseModal(ev){
-  let tier="good",lbl="😊 Good Luck!";
+  let tier="good",lbl="😊 Good Luck!",headerColor="var(--green)";
   const card=ev.card||ev.hazard;
-  if(ev.tier==="very_good"){tier="very-good";lbl="🌟 JACKPOT!";}
-  else if(ev.tier==="very_bad"){tier="very-bad";lbl="💀 CATASTROPHE!";}
-  else if(ev.tier==="bad"||ev.isHazard){tier="bad";lbl="😬 Bad Luck!";}
+  if(ev.tier==="very_good"){tier="very-good";lbl="🌟 JACKPOT!";headerColor="var(--accent)";}
+  else if(ev.tier==="very_bad"){tier="very-bad";lbl="💀 CATASTROPHE!";headerColor="var(--red)";}
+  else if(ev.tier==="bad"){tier="bad";lbl="😬 Bad Luck!";headerColor="var(--orange)";}
   let amount=0;
   if(card?.action==="gain")amount=card.amount;
   if(card?.action==="pay")amount=-card.amount;
   if(ev.lostMoney)amount=-ev.lostMoney;
   qid("surp-c").innerHTML=`
-    <div class="surp-card ${tier} card-reveal">
-      <div class="surp-tier">${lbl}</div>
-      <span class="surp-ico">${card?.icon||"🃏"}</span>
-      ${card?.title?`<div class="surp-title">${card.title}</div>`:""}
-      <div class="surp-text">${card?.text||card?.desc||""}</div>
-      ${amount?`<div class="surp-amount" style="color:${amount>0?"var(--green)":"var(--red)"}">${amount>0?"+":""} ${CUR()}${Math.abs(amount)}</div>`:""}
-      ${ev.lostHouses?`<div style="color:var(--orange);font-size:.8rem">🏚️ ${ev.lostHouses} structure(s) demolished</div>`:""}
+    <div class="surp-card ${tier} card-flip">
+      <div class="surp-card-inner">
+        <div class="surp-card-front"><div style="font-size:2.5rem">🃏</div><div style="font-size:.8rem;color:var(--muted)">Surprise Card</div></div>
+        <div class="surp-card-back">
+          <div class="surp-tier" style="color:${headerColor}">${lbl}</div>
+          <span class="surp-ico">${card?.icon||"🃏"}</span>
+          ${card?.title?`<div class="surp-title">${card.title}</div>`:""}
+          <div class="surp-text">${card?.text||card?.desc||""}</div>
+          ${amount?`<div class="surp-amount" style="color:${amount>0?"var(--green)":"var(--red)"}">${amount>0?"+":""} ${CUR()}${Math.abs(amount)}</div>`:""}
+          ${ev.lostHouses?`<div style="color:var(--orange);font-size:.8rem;margin-top:.3rem">🏚️ ${ev.lostHouses} structure(s) demolished</div>`:""}
+        </div>
+      </div>
     </div>
-    <button class="btn btn-acc" style="width:100%;margin-top:.6rem" onclick="handleSurpriseClose()">Continue</button>`;
+    <button class="btn btn-acc" style="width:100%;margin-top:.6rem" onclick="handleSurpriseClose()">Take it! →</button>`;
   om("m-surp");
 }
 function showGovModal(ev){
+  const details=[];
+  if(ev.debtCleared)details.push(`✅ Cleared debt of ${CUR()}${ev.debtCleared}`);
+  if(ev.cashGrant)details.push(`💵 Cash grant: ${CUR()}${ev.cashGrant}`);
+  if(!details.length)details.push("Your finances are healthy — no action needed.");
   qid("gov-c").innerHTML=`
-    <div class="card-reveal" style="background:color-mix(in srgb,var(--green) 8%,var(--card));border:2px solid var(--green);border-radius:12px;padding:1.1rem;text-align:center">
-      <div style="font-size:2.4rem">🏛️</div>
-      <div style="font-size:1rem;font-weight:800;color:var(--green)">Government Protection</div>
-      <div style="font-size:.8rem;color:var(--muted);margin-top:.3rem">${ev.message}</div>
+    <div class="card-reveal" style="background:color-mix(in srgb,var(--green) 10%,var(--card));border:2px solid var(--green);border-radius:12px;padding:1.3rem;text-align:center">
+      <div style="font-size:3rem">🏛️</div>
+      <div style="font-size:1.05rem;font-weight:800;color:var(--green);margin:.4rem 0">Government Protection</div>
+      ${details.map(d=>`<div style="font-size:.82rem;color:var(--muted);padding:.2rem 0">${d}</div>`).join("")}
+      ${ev.message?`<div style="font-size:.78rem;color:var(--muted);margin-top:.5rem;font-style:italic">${ev.message}</div>`:""}
     </div>
-    <button class="btn btn-acc" style="width:100%;margin-top:.55rem" onclick="ga('gov_ack');cm('m-gov')">Continue</button>`;
+    <button class="btn btn-acc" style="width:100%;margin-top:.6rem" onclick="ga('gov_ack');cm('m-gov')">OK, thanks!</button>`;
   om("m-gov");
 }
 
@@ -972,6 +1118,10 @@ function showPropModal(pos){
   }
   if(sp.type==="airport")rH=`<table class="rtbl"><tr><th>Airports</th><th>Fee</th></tr>${[1,2,3,4].map(n=>`<tr><td>${n}</td><td>${CUR()}${gs.settings.airportFee*n}</td></tr>`).join("")}</table>`;
   if(sp.type==="railway")rH=`<table class="rtbl"><tr><th>Railways</th><th>Fee</th></tr>${[1,2,3,4].map(n=>`<tr><td>${n}</td><td>${CUR()}${25*Math.pow(2,n-1)}</td></tr>`).join("")}</table>`;
+  const me=gs.players.find(p=>p.id===myId);
+  const isBuyPhase=gs.phase==="buy"&&me?.position===pos&&gs.players[gs.currentPlayerIdx]?.id===myId;
+  const cc=me?.creditCard;
+  const canCreditBuy=isBuyPhase&&!own&&cc?.active&&(cc.limit-cc.used)>=(sp.price||0);
   qid("prop-c").innerHTML=`
     <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem">
       <div style="width:14px;height:14px;border-radius:50%;background:${gc}"></div>
@@ -982,7 +1132,11 @@ function showPropModal(pos){
     ${own?`<p style="color:${own.color};font-size:.78rem;margin-bottom:.35rem">Owner: ${own.name}</p>`:`<p style="color:var(--muted);font-size:.76rem;margin-bottom:.35rem">Unowned</p>`}
     ${sp.mortgaged?`<p style="color:var(--red);font-size:.75rem">⚠️ Mortgaged</p>`:""}
     ${sp.price?`<p style="font-size:.82rem;margin-bottom:.35rem">Price: <b>${CUR()}${sp.price}</b>${sp.houseCost?` · House: <b>${CUR()}${sp.houseCost}</b>`:""}</p>`:""}
-    ${rH}`;
+    ${rH}
+    ${canCreditBuy?`<div style="margin-top:.6rem;padding:.45rem;background:color-mix(in srgb,var(--purple) 10%,transparent);border:1px solid var(--purple);border-radius:8px">
+      <div style="font-size:.72rem;color:var(--muted);margin-bottom:.3rem">💳 Credit available: ${CUR()}${cc.limit-cc.used}</div>
+      <button class="btn btn-pur" style="width:100%" onclick="ga('buy',{useCredit:true});cm('m-prop')">💳 Buy on Credit</button>
+    </div>`:""}`;
   om("m-prop");
 }
 
@@ -1152,7 +1306,7 @@ function us(k,v){socket.emit("update_settings",{settings:{[k]:v}});}
 let _wwCountries=[];
 async function loadCountries(){
   if(_wwCountries.length)return;
-  try{const r=await fetch("/api/countries");_wwCountries=await r.json();}catch(e){console.warn("Countries load failed",e);}
+  try{const r=await fetch("/mapi/countries");_wwCountries=await r.json();}catch(e){console.warn("Countries load failed",e);}
 }
 
 function goBoardSelect(){
@@ -1240,14 +1394,25 @@ function updateWwCount(){
 }
 
 /* ─── CREATE ROOM (FIXED) ────────────────────────────────── */
+function _waitForConnect(timeoutMs=5000){
+  if(socket?.connected)return Promise.resolve(true);
+  return new Promise(resolve=>{
+    const tid=setTimeout(()=>resolve(false),timeoutMs);
+    socket?.once("connect",()=>{clearTimeout(tid);resolve(true);});
+    if(!socket?.connected)socket?.connect();
+  });
+}
+
 async function createRoom(){
-  // FIX: wait for socket connection with retries
   if(!socket){toast("⚠️ Initializing…");setTimeout(createRoom,800);return;}
   if(!socket.connected){
-    toast("⚠️ Connecting… please wait");
-    socket.connect();
-    await sleep(1500);
-    if(!socket.connected){toast("❌ Cannot connect to server. Check your network.");return;}
+    const btn=qid("create-btn");
+    if(btn){btn.disabled=true;btn.textContent="Connecting…";}
+    const ok=await _waitForConnect(5000);
+    if(!ok){
+      if(btn){btn.disabled=false;btn.textContent="▶ Create Game";}
+      toast("❌ Cannot reach server — check your connection.");return;
+    }
   }
   const btn=qid("create-btn");
   if(btn){btn.disabled=true;btn.textContent="Creating…";}
@@ -1269,7 +1434,7 @@ async function _doCreateRoom(customSpaces=null){
   }else if(curBoardType==="random"){
     const s=(qid("seed-inp")?.value||curSeed).toUpperCase();
     try{
-      const r=await fetch(`/api/random-board?seed=${s}&mode=${curRMode}&S=${curSize}`);
+      const r=await fetch(`/mapi/random-board?seed=${s}&mode=${curRMode}&S=${curSize}`);
       const d=await r.json();
       mapConfig={spaces:d.board,tilesPerSide:curSize,name:`Random #${d.seed}`,seed:d.seed,settings:{}};
     }catch{toast("❌ Error generating board");return;}
@@ -1282,7 +1447,7 @@ async function _doCreateRoom(customSpaces=null){
     mapConfig={name:"Worldwide Custom",tilesPerSide:curSize,preset:"worldwide",wwCities:selected,settings:{}};
   }else if(["india","uk","usa"].includes(curBoardType)){
     try{
-      const r=await fetch(`/api/domestic-board?preset=${curBoardType}&S=${curSize}`);
+      const r=await fetch(`/mapi/domestic-board?preset=${curBoardType}&S=${curSize}`);
       const d=await r.json();
       mapConfig={spaces:d.board,tilesPerSide:curSize,name:curBoardType.toUpperCase(),settings:{}};
     }catch{toast("❌ Error generating board");return;}
@@ -1310,7 +1475,7 @@ async function browseRooms(){await refreshBrowse();om("m-browse");browseInterval
 function closeBrowse(){cm("m-browse");clearInterval(browseInterval);browseInterval=null;}
 async function refreshBrowse(){
   try{
-    const rooms=await(await fetch("/api/rooms")).json();
+    const rooms=await(await fetch("/mapi/rooms")).json();
     qid("browse-c").innerHTML=!rooms.length?`<p style="color:var(--muted)">No public games right now.</p>`:
       rooms.map(r=>`<div style="display:flex;align-items:center;gap:.6rem;padding:.5rem;border:1px solid var(--border);border-radius:8px;margin-bottom:.35rem">
         <span style="font-size:1rem">${r.hostToken}</span>
@@ -1354,7 +1519,23 @@ function toast(msg){
 async function openEditor(){
   ss("editor");
   if(!editorCountries.length){
-    try{editorCountries=await(await fetch("/api/countries")).json();}catch{}
+    const pool=qid("editor-country-pool");
+    if(pool)pool.innerHTML=`<div style="padding:1rem;text-align:center;color:var(--muted)">⏳ Loading countries…</div>`;
+    let loaded=false;
+    for(let attempt=0;attempt<3;attempt++){
+      try{
+        const res=await fetch("/mapi/countries");
+        if(!res.ok)throw new Error("status "+res.status);
+        editorCountries=await res.json();
+        loaded=true;break;
+      }catch(e){
+        if(attempt<2)await sleep(800);
+      }
+    }
+    if(!loaded){
+      if(pool)pool.innerHTML=`<div style="padding:1rem;text-align:center;color:var(--red)">❌ Could not load countries. Is the server running?<br><button class="btn btn-sm btn-out" style="margin-top:.5rem" onclick="openEditor()">Retry</button></div>`;
+      return;
+    }
   }
   editorRenderCountryPool();
   editorRenderBoard();

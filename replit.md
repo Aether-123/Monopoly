@@ -108,10 +108,16 @@ Full-featured Monopoly Online multiplayer game. Architecture:
   - Runs on port 8001 (GAME_PORT env var)
   - Engine: `server/engine.py` — 27 countries, city prices $20–$510, railways, airports, hazards, surprises
 - **Startup**: `pnpm run dev` launches Python backend (port 8001) then Vite (PORT env var)
-- **Proxy**: Vite proxies `/socket.io/` and `/api/` to Python backend on port 8001
+- **Proxy**: Vite proxies `/socket.io/` and `/mapi/` to Python backend on port 8001
+  - NOTE: `/api/` prefix is claimed by the api-server artifact (Express), so the monopoly game uses `/mapi/` prefix for all Python backend REST routes
+  - Countries API returns `base` field so client can compute city price = `base + index * 10`
 
-**Key features**: 27 countries, real-time Socket.IO multiplayer, map editor (drag & drop), bank system, custom avatars, 8 board types (standard/worldwide/random/domestic), railways, airports, hazards, auctions, votekick, spectator mode, reconnection grace (2 min), 8 themes.
+**Key features**: 27 countries, real-time Socket.IO multiplayer, map editor (drag & drop), bank system (full modal with tabs), custom avatars, 8 board types (standard/worldwide/random/domestic), railways, airports, hazards (dedicated modal with insurance claim), auctions (SVG countdown ring), surprise card flip animation, gov protection modal, credit-card property purchase, votekick, spectator mode, reconnection grace (2 min), 8 themes.
 
 **City prices**: `price = country.base + cityIndex * 10` — lowest $20 (Nigeria tier 1, city 0), highest ~$510 (Singapore tier 6, city 14).
+
+**Bank modal**: Full overlay (`m-bank`) with 4 tabs (Deposits, Loans, Credit Card, Insurance). Opened by clicking "🏦 Bank" header in right sidebar. Sidebar keeps mini balance summary.
+
+**Event modals**: `m-haz` for hazard events (themed icons, insurance claim button), `m-surp` for surprise events (card-flip animation), `m-gov` for government protection events.
 
 - `pnpm --filter @workspace/monopoly-game run dev` — starts both Python backend and Vite dev server

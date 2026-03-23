@@ -493,7 +493,7 @@ async def chat(sid, data):
     if len(room["chatLog"]) > 100: room["chatLog"] = room["chatLog"][-80:]
     await sio.emit("chat_msg", msg, room=room["id"])
 
-@app.get("/api/rooms")
+@app.get("/mapi/rooms")
 async def list_rooms():
     pub = [
         {"id":r["id"],"hostName":r["players"][0]["name"] if r["players"] else "?",
@@ -507,20 +507,20 @@ async def list_rooms():
     ]
     return JSONResponse(pub)
 
-@app.get("/api/countries")
+@app.get("/mapi/countries")
 async def list_countries():
     return JSONResponse(E.get_countries_list())
 
-@app.get("/api/domestic-maps")
+@app.get("/mapi/domestic-maps")
 async def list_domestic_maps():
     return JSONResponse(E.get_domestic_maps())
 
-@app.get("/api/domestic-board")
+@app.get("/mapi/domestic-board")
 async def domestic_board(preset:str="india", S:int=9):
     board = E.generate_domestic_board(preset, max(6, min(S, 12)))
     return JSONResponse({"preset":preset,"board":board,"tilesPerSide":S})
 
-@app.get("/api/random-board")
+@app.get("/mapi/random-board")
 async def random_board(seed:str="", mode:str="balanced", S:int=9):
     actual = seed.upper() or "".join(random.choices(SEED_CHARS, k=6))
     board = E.generate_random_board(actual, mode, max(6, min(S, 12)))

@@ -312,37 +312,42 @@ button { cursor: pointer; }
 .board-wm { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%) rotate(-30deg); font-size: 2.8rem; font-weight: 900; color: var(--accent); opacity: .035; pointer-events: none; white-space: nowrap; letter-spacing: 4px; user-select: none; }
 
 /* ─────────────────────────────────────────────────
-   TILE BASE
+   TILE BASE  (Ponomoly.io style — no always-on strip)
    All tiles: sp + sp-{side} or spco
    Non-corner HTML:
-     .sp-band  = colored strip
      .sp-body  = content (icon + name + price)
-       .sp-ico = flag/emoji
+       .sp-ico = large round flag/emoji
        .sp-nm  = city name
        .sp-pr  = price
+   Owner color shown via inline box-shadow on owned tiles only.
 ───────────────────────────────────────────────── */
 .sp {
-  background: #131520;
-  border: 1px solid rgba(255,255,255,0.06);
+  background: linear-gradient(160deg, #1a1d2e 0%, #12141f 100%);
+  border: 1px solid rgba(255,255,255,0.09);
+  border-top: 1px solid rgba(255,255,255,0.16);
   overflow: hidden;
   cursor: pointer;
   position: relative;
-  transition: filter .12s, box-shadow .12s;
+  transition: filter .15s, box-shadow .15s, transform .12s;
   user-select: none;
-  border-radius: 3px;
+  border-radius: 5px;
+  box-shadow: 0 3px 8px rgba(0,0,0,.55), 0 1px 2px rgba(0,0,0,.4);
 }
-.sp:hover { filter: brightness(1.22); box-shadow: inset 0 0 0 1px rgba(245,197,24,0.25); }
-.spco { border-radius: 5px !important; }
-.spmort { opacity: .4; }
-.sphaz  { box-shadow: inset 0 0 0 2px var(--red); }
-.sptaxret { box-shadow: inset 0 0 0 2px var(--green); }
-.sprandomtax { box-shadow: inset 0 0 0 2px var(--orange); }
-.sp-fullset { box-shadow: inset 0 0 0 2px var(--accent); }
-
-/* ── COLORED BAND ── */
-.sp-band {
-  flex-shrink: 0;
+.sp:hover {
+  filter: brightness(1.28);
+  transform: scale(1.045);
+  box-shadow: 0 6px 18px rgba(0,0,0,.7), 0 0 0 1px rgba(245,197,24,0.3);
+  z-index: 2;
 }
+.spco {
+  border-radius: 7px !important;
+  box-shadow: 0 4px 14px rgba(0,0,0,.65);
+}
+.spmort { opacity: .38; }
+.sphaz  { box-shadow: 0 0 0 2.5px var(--red), 0 0 12px var(--red)55 !important; }
+.sptaxret { box-shadow: 0 0 0 2.5px var(--green), 0 0 12px var(--green)55 !important; }
+.sprandomtax { box-shadow: 0 0 0 2.5px var(--orange), 0 0 12px var(--orange)55 !important; }
+.sp-fullset { box-shadow: 0 0 0 2.5px var(--accent), 0 0 14px var(--accent)66 !important; }
 
 /* ── CONTENT BODY ── */
 .sp-body {
@@ -352,24 +357,25 @@ button { cursor: pointer; }
   align-items: center;
   justify-content: center;
   gap: 2px;
-  padding: 3px 2px;
+  padding: 4px 2px;
   overflow: hidden;
   min-width: 0;
   min-height: 0;
 }
 .sp-ico {
-  font-size: 1.05rem;
+  font-size: 1.2rem;
   line-height: 1;
   flex-shrink: 0;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,.5));
 }
 .sp-nm {
   font-size: 10.5px;
   font-weight: 700;
   text-align: center;
-  line-height: 1.2;
+  line-height: 1.15;
   color: var(--text);
   overflow: hidden;
-  max-height: 40px;
+  max-height: 42px;
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
@@ -381,68 +387,29 @@ button { cursor: pointer; }
   white-space: nowrap;
 }
 
-/* ── BOTTOM ROW (pos 1..S, row=S+2) ── 
-   Tile is portrait (tPx wide × cPx tall... wait, tPx wide × tPx tall actually)
-   No — bottom row: grid row = S+2 which is cPx tall? No.
-   Actually: bottom row uses row=S+2 = cPx height. Regular tiles cPx=100, tPx=88.
-   Bottom tiles: tPx wide × tPx tall (90px × 88px)... 
-   Wait — bottom tiles are in the last ROW which is tPx tall? No.
-   The grid-template-rows: cPx repeat(S,tPx) cPx
-   Row 1 = cPx (top corners + top row tiles)
-   Rows 2..S+1 = tPx each (left/right column tiles)
-   Row S+2 = cPx (bottom corners + bottom row tiles)
-   So BOTTOM tiles (row=S+2) are cPx tall. And they are tPx wide (in regular columns).
-   LEFT tiles (col=1) are cPx wide and tPx tall.
-   So: bottom tiles = tPx wide × cPx tall = PORTRAIT ✓
-       left tiles   = cPx wide × tPx tall = LANDSCAPE ✓
-───────────────────────────────────────────────── */
+/* ── PORTRAIT tiles (bottom row = column, top row = column-reverse) ── */
 .sp-bottom {
   display: flex;
-  flex-direction: column;
+  flex-direction: column;        /* icon at top (outer edge), price at bottom */
 }
-.sp-bottom .sp-band {
-  width: 100%;
-  height: 18px;
-}
-/* content reads top→bottom (strip at top = inner edge facing center) */
-
-/* ── TOP ROW (pos 2C+1..3C-1) — portrait, strip at bottom (inner) ── */
 .sp-top {
   display: flex;
-  flex-direction: column-reverse;
+  flex-direction: column-reverse; /* flipped: icon at bottom (outer), price at top */
 }
-.sp-top .sp-band {
-  width: 100%;
-  height: 18px;
-}
-/* column-reverse: band at DOM-end = visual bottom.
-   sp-body is above the band.
-   Content order: ico(top/outer), nm, pr(bottom/inner=near band). ✓ */
 
-/* ── LEFT COLUMN (pos C+1..2C-1) — landscape (cPx wide × tPx tall)
-   Strip on RIGHT side = inner edge facing board center.
-   Text must be readable when you tilt head to the LEFT (CCW).
-   We use writing-mode: vertical-rl on a BLOCK container (not flex).
-   Then rotate(180deg) to make text flow bottom→top.
-   In vertical-rl + block: elements stack right→left.
-   After rotate(180deg): elements stack left→right = ico left(outer), nm, pr right(inner near strip).
-───────────────────────────────────────────────── */
+/* ── LANDSCAPE tiles — text rotated via writing-mode ── */
 .sp-left {
   display: flex;
-  flex-direction: row-reverse;  /* band on right = inner */
-}
-.sp-left .sp-band {
-  width: 18px;
-  height: 100%;
+  flex-direction: row;
 }
 .sp-left .sp-body {
   writing-mode: vertical-rl;
   transform: rotate(180deg);
-  /* CRITICAL: use block display for children, not flex, inside writing-mode */
   display: block;
   text-align: center;
   overflow: hidden;
   padding: 3px;
+  flex: 1;
 }
 .sp-left .sp-ico,
 .sp-left .sp-nm,
@@ -455,24 +422,15 @@ button { cursor: pointer; }
   white-space: normal;
 }
 .sp-left .sp-nm {
-  max-width: 60px;
+  max-width: 64px;
   overflow: hidden;
   -webkit-line-clamp: unset;
   display: block;
 }
 
-/* ── RIGHT COLUMN (pos 3C+1..4C-1) — landscape
-   Strip on LEFT side = inner edge.
-   Text readable by tilting head to the RIGHT (CW).
-   writing-mode: vertical-lr = text flows top→bottom.
-───────────────────────────────────────────────── */
 .sp-right {
   display: flex;
-  flex-direction: row;  /* band on left = inner */
-}
-.sp-right .sp-band {
-  width: 18px;
-  height: 100%;
+  flex-direction: row;
 }
 .sp-right .sp-body {
   writing-mode: vertical-lr;
@@ -480,6 +438,7 @@ button { cursor: pointer; }
   text-align: center;
   overflow: hidden;
   padding: 3px;
+  flex: 1;
 }
 .sp-right .sp-ico,
 .sp-right .sp-nm,
@@ -489,7 +448,7 @@ button { cursor: pointer; }
   overflow: hidden;
 }
 .sp-right .sp-nm {
-  max-width: 60px;
+  max-width: 64px;
   overflow: hidden;
   display: block;
 }
@@ -609,6 +568,68 @@ button { cursor: pointer; }
 .bid-amount { font-weight: 700; color: var(--accent); }
 .auction-timer { font-size: 1.1rem; font-weight: 800; color: var(--orange); animation: timerPulse 1s ease infinite; }
 .auction-timer.urgent { color: var(--red); animation: timerPulse .5s ease infinite; }
+.auc-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: .7rem; gap: .5rem; }
+.auc-ring-wrap { position: relative; width: 52px; height: 52px; flex-shrink: 0; }
+.auc-ring { width: 52px; height: 52px; transform: rotate(-90deg); }
+.auc-ring-bg { fill: none; stroke: var(--border); stroke-width: 3.5; }
+.auc-ring-fill { fill: none; stroke: var(--green); stroke-width: 3.5; stroke-linecap: round; transition: stroke-dashoffset .9s linear, stroke .3s; }
+.auc-ring-lbl { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 1rem; font-weight: 900; color: var(--accent); }
+.auc-bid-center { text-align: center; margin: .5rem 0 .6rem; }
+.auc-cur-bid { font-size: 2.5rem; font-weight: 900; color: var(--accent); line-height: 1; }
+.auc-cur-bidder { font-size: .8rem; margin-top: .25rem; }
+.auc-prop-strip { display: flex; gap: .8rem; font-size: .72rem; color: var(--muted); justify-content: center; padding: .4rem; background: var(--bg); border-radius: 7px; margin-bottom: .5rem; flex-wrap: wrap; }
+.auc-prop-strip span b { color: var(--fg); }
+.auc-history { max-height: 90px; overflow-y: auto; margin-bottom: .55rem; background: var(--bg); border-radius: 7px; padding: .4rem .6rem; }
+.auc-hist-row { font-size: .72rem; padding: .18rem 0; border-bottom: 1px solid var(--border)22; }
+.auc-hist-latest { font-size: .8rem; font-weight: 700; border-color: var(--accent)33; }
+.auc-bid-btns { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: .4rem; }
+.auc-bid-btns .btn { flex: 1; min-width: 60px; }
+.auc-folded-msg { text-align: center; padding: .7rem; font-size: .8rem; color: var(--muted); background: var(--bg); border-radius: 8px; border: 1px solid var(--border); margin-top: .4rem; }
+
+/* ── BANK MODAL ──────────────────────────────────── */
+.bk-tabs { display: flex; gap: .4rem; margin-bottom: .8rem; flex-wrap: wrap; }
+.bk-tab { flex: 1; min-width: 80px; padding: .45rem .5rem; background: transparent; border: 1.5px solid var(--border); border-radius: 8px; color: var(--muted); cursor: pointer; font-size: .78rem; font-weight: 600; transition: .15s; }
+.bk-tab.on, .bk-tab:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); border-color: var(--accent); color: var(--accent); }
+.bk-sec { display: none; }
+.bk-sec.on { display: block; }
+.bk-stat-row { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; margin-bottom: .8rem; }
+.bk-stat { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: .5rem .65rem; display: flex; flex-direction: column; gap: .18rem; }
+.bk-stat-lbl { font-size: .67rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.bk-stat-val { font-size: 1.05rem; font-weight: 800; }
+.bk-action-row { margin-bottom: .6rem; }
+.bk-action-lbl { display: block; font-size: .72rem; color: var(--muted); margin-bottom: .3rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
+.bk-note { font-size: .72rem; color: var(--muted); padding: .4rem .5rem; background: color-mix(in srgb, var(--muted) 6%, transparent); border-radius: 6px; margin-top: .5rem; }
+.bk-loans-list { display: flex; flex-direction: column; gap: .4rem; margin-bottom: .6rem; }
+.bk-loan-card { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: .5rem .65rem; }
+.bk-loan-card.bk-loan-urgent { border-color: var(--red); background: color-mix(in srgb, var(--red) 6%, var(--bg)); }
+.bk-loan-info { display: flex; justify-content: space-between; margin-bottom: .2rem; font-size: .8rem; }
+.bk-loan-balance { font-size: 1.1rem; font-weight: 900; color: var(--red); margin-bottom: .3rem; }
+.bk-loan-btns { display: flex; gap: .3rem; flex-wrap: wrap; }
+.bk-cc-card { background: linear-gradient(135deg,#1a1a2e,#16213e,#0f3460); border-radius: 12px; padding: 1rem 1.2rem; color: #fff; position: relative; overflow: hidden; margin-bottom: .5rem; }
+.bk-cc-card::before { content: ""; position: absolute; right: -20px; top: -20px; width: 100px; height: 100px; border-radius: 50%; background: rgba(255,255,255,.07); }
+.bk-cc-chip { font-size: 1.8rem; margin-bottom: .4rem; }
+.bk-cc-name { font-size: .8rem; font-weight: 700; letter-spacing: .08em; }
+.bk-cc-limit { font-size: .65rem; opacity: .7; margin-top: .2rem; }
+.bk-cc-bar-wrap { height: 6px; background: var(--border); border-radius: 3px; margin: .6rem 0 .3rem; overflow: hidden; }
+.bk-cc-bar { height: 100%; background: linear-gradient(90deg, var(--purple), var(--red)); border-radius: 3px; transition: width .4s; }
+.bk-cc-empty, .bk-ins-empty { text-align: center; padding: 1.2rem .5rem .5rem; }
+.bk-ins-active { text-align: center; padding: .8rem .5rem .3rem; background: color-mix(in srgb, var(--green) 8%, var(--card)); border: 1.5px solid var(--green)44; border-radius: 10px; margin-bottom: .5rem; }
+
+/* ── HAZARD MODAL ────────────────────────────────── */
+.haz-card { border-radius: 14px; padding: 1.4rem 1rem; text-align: center; background: color-mix(in srgb, var(--red) 8%, var(--card)); border: 2px solid var(--red)55; margin-bottom: .45rem; }
+.haz-icon { font-size: 3.5rem; display: block; margin-bottom: .5rem; animation: iconBounce .5s ease; }
+.haz-title { font-size: 1.2rem; font-weight: 900; color: var(--red); margin-bottom: .3rem; }
+.haz-desc { font-size: .82rem; color: var(--muted); margin-bottom: .5rem; }
+.haz-loss { font-size: 1.6rem; font-weight: 900; color: var(--red); animation: amountPop .4s ease; }
+.haz-houses { font-size: .85rem; color: var(--orange); margin-top: .3rem; }
+
+/* ── CARD FLIP ANIMATION ─────────────────────────── */
+.card-flip { perspective: 800px; }
+.surp-card-inner { position: relative; transform-style: preserve-3d; animation: cardFlip .7s ease forwards; min-height: 160px; }
+.surp-card-front, .surp-card-back { position: absolute; inset: 0; backface-visibility: hidden; display: flex; flex-direction: column; align-items: center; justify-content: center; border-radius: 10px; padding: .8rem; }
+.surp-card-front { background: color-mix(in srgb, var(--muted) 10%, var(--card)); border: 2px solid var(--border); }
+.surp-card-back { background: inherit; transform: rotateY(180deg); border: 2px solid currentColor; }
+@keyframes cardFlip { 0% { transform: rotateY(0); } 40% { transform: rotateY(90deg); } 41% { } 100% { transform: rotateY(180deg); } }
 
 /* ── TOAST ───────────────────────────────────────── */
 .toast { position: fixed; bottom: 1.4rem; left: 50%; transform: translateX(-50%); background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: .55rem 1.1rem; font-size: .83rem; z-index: 1000; box-shadow: 0 4px 20px rgba(0,0,0,.5); transition: opacity .3s; white-space: nowrap; max-width: 90vw; text-align: center; }

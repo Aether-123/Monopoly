@@ -341,7 +341,7 @@
       <div id="trade-player-list"></div>
       <div id="trade-expanded" style="display:none"></div>
     </div>
-    <div class="panel-hdr" style="border-top:1px solid var(--border)">🏦 Bank</div>
+    <div class="panel-hdr" style="border-top:1px solid var(--border);cursor:pointer" onclick="openBankModal()">🏦 Bank <span style="font-size:.62rem;color:var(--accent);margin-left:auto">Open ↗</span></div>
     <div id="panel-bank" style="flex-shrink:0;overflow-y:auto;max-height:220px">
       <div class="bank-mini-tabs">
         <button class="bmt on" onclick="bmtab('dep',this)" title="Deposit">💰</button>
@@ -373,6 +373,29 @@
 <div class="ov ovh" id="m-auction"><div class="modal wide"><div id="auction-c"></div></div></div>
 
 <div class="ov ovh" id="m-votekick"><div class="modal"><button class="mc" onclick="cm('m-votekick')">✕</button><div id="votekick-c"></div></div></div>
+
+<div class="ov ovh" id="m-bank">
+  <div class="modal xwide">
+    <button class="mc" onclick="cm('m-bank')">✕</button>
+    <h2 style="margin-bottom:.75rem">🏦 Bank</h2>
+    <div class="bk-tabs">
+      <button class="bk-tab on" onclick="bktab('dep',this)">💰 Deposits</button>
+      <button class="bk-tab" onclick="bktab('loans',this)">💸 Loans</button>
+      <button class="bk-tab" onclick="bktab('cc',this)">💳 Credit Card</button>
+      <button class="bk-tab" onclick="bktab('ins',this)">🛡️ Insurance</button>
+    </div>
+    <div id="bk-dep" class="bk-sec on"></div>
+    <div id="bk-loans" class="bk-sec"></div>
+    <div id="bk-cc" class="bk-sec"></div>
+    <div id="bk-ins" class="bk-sec"></div>
+  </div>
+</div>
+
+<div class="ov ovh" id="m-haz">
+  <div class="modal">
+    <div id="haz-c"></div>
+  </div>
+</div>
 
 <script src="game.js"></script>
 </body>
