@@ -371,20 +371,31 @@
       </div>
       <div class="dice-over dh" id="dice-over" onclick="rollDice()">
         <div class="dice-row">
-          <div class="die3d" id="d1" data-face="1">
-            <div class="die-cube">
-              <div class="face f1"></div><div class="face f2"></div><div class="face f3"></div>
-              <div class="face f4"></div><div class="face f5"></div><div class="face f6"></div>
+          <div class="dice-wrapper">
+            <div class="dice" id="die1" data-face="1">
+              <div class="face front"></div>
+              <div class="face back"></div>
+              <div class="face right"></div>
+              <div class="face left"></div>
+              <div class="face top"></div>
+              <div class="face bottom"></div>
             </div>
           </div>
-          <div class="die3d" id="d2" data-face="1">
-            <div class="die-cube">
-              <div class="face f1"></div><div class="face f2"></div><div class="face f3"></div>
-              <div class="face f4"></div><div class="face f5"></div><div class="face f6"></div>
+
+          <div class="dice-wrapper">
+            <div class="dice" id="die2" data-face="1">
+              <div class="face front"></div>
+              <div class="face back"></div>
+              <div class="face right"></div>
+              <div class="face left"></div>
+              <div class="face top"></div>
+              <div class="face bottom"></div>
             </div>
           </div>
         </div>
         <div class="dice-hint" id="dice-hint-txt">🎲 Click to Roll!</div>
+        <div class="dice-total" id="dice-total"></div>
+        <div class="dice-doubles hidden" id="doubles-badge">🎲 Doubles!</div>
       </div>
     </div>
   </div>

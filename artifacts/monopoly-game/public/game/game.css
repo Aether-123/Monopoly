@@ -766,36 +766,73 @@ button { cursor: pointer; }
 .dice-over { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -136px); background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: .45rem .65rem; display: flex; flex-direction: column; align-items: center; gap: .22rem; z-index: 31; animation: diceIn .3s ease; }
 @keyframes diceIn { from { opacity: 0; transform: scale(.8); } to { opacity: 1; transform: none; } }
 .dh { display: none !important; }
-.dice-row { display: flex; gap: .35rem; }
-.die3d { width: 30px; height: 30px; perspective: 260px; cursor: pointer; }
-.die-cube { width: 100%; height: 100%; position: relative; transform-style: preserve-3d; transition: transform .5s cubic-bezier(.22,.61,.36,1); }
-.die3d .face { position: absolute; width: 30px; height: 30px; background: #fff; border: 1px solid #d8d8d8; border-radius: 6px; box-shadow: inset 0 0 0 1px #fff, 0 1px 3px rgba(0,0,0,.25); }
-.die3d .f1 { background: radial-gradient(circle at 50% 50%, #111 2.2px, transparent 2.4px), #fff; }
-.die3d .f2 { background: radial-gradient(circle at 28% 28%, #111 2.1px, transparent 2.3px), radial-gradient(circle at 72% 72%, #111 2.1px, transparent 2.3px), #fff; }
-.die3d .f3 { background: radial-gradient(circle at 28% 28%, #111 2.1px, transparent 2.3px), radial-gradient(circle at 50% 50%, #111 2.1px, transparent 2.3px), radial-gradient(circle at 72% 72%, #111 2.1px, transparent 2.3px), #fff; }
-.die3d .f4 { background: radial-gradient(circle at 28% 28%, #111 2.1px, transparent 2.3px), radial-gradient(circle at 72% 28%, #111 2.1px, transparent 2.3px), radial-gradient(circle at 28% 72%, #111 2.1px, transparent 2.3px), radial-gradient(circle at 72% 72%, #111 2.1px, transparent 2.3px), #fff; }
-.die3d .f5 { background: radial-gradient(circle at 28% 28%, #111 2.1px, transparent 2.3px), radial-gradient(circle at 72% 28%, #111 2.1px, transparent 2.3px), radial-gradient(circle at 50% 50%, #111 2.1px, transparent 2.3px), radial-gradient(circle at 28% 72%, #111 2.1px, transparent 2.3px), radial-gradient(circle at 72% 72%, #111 2.1px, transparent 2.3px), #fff; }
-.die3d .f6 { background: radial-gradient(circle at 28% 26%, #111 2px, transparent 2.2px), radial-gradient(circle at 72% 26%, #111 2px, transparent 2.2px), radial-gradient(circle at 28% 50%, #111 2px, transparent 2.2px), radial-gradient(circle at 72% 50%, #111 2px, transparent 2.2px), radial-gradient(circle at 28% 74%, #111 2px, transparent 2.2px), radial-gradient(circle at 72% 74%, #111 2px, transparent 2.2px), #fff; }
-.die3d .f1 { transform: rotateY(0deg) translateZ(15px); }
-.die3d .f2 { transform: rotateY(90deg) translateZ(15px); }
-.die3d .f3 { transform: rotateY(180deg) translateZ(15px); }
-.die3d .f4 { transform: rotateY(-90deg) translateZ(15px); }
-.die3d .f5 { transform: rotateX(90deg) translateZ(15px); }
-.die3d .f6 { transform: rotateX(-90deg) translateZ(15px); }
-.die3d[data-face="1"] .die-cube { transform: rotateX(0deg) rotateY(0deg); }
-.die3d[data-face="2"] .die-cube { transform: rotateY(-90deg); }
-.die3d[data-face="3"] .die-cube { transform: rotateY(180deg); }
-.die3d[data-face="4"] .die-cube { transform: rotateY(90deg); }
-.die3d[data-face="5"] .die-cube { transform: rotateX(-90deg); }
-.die3d[data-face="6"] .die-cube { transform: rotateX(90deg); }
-.die3d.rolling .die-cube { animation: die3dRoll .22s linear infinite; }
+.dice-row { display: flex; gap: .45rem; }
+.dice-wrapper {
+  perspective: 600px;
+  width: 44px;
+  height: 44px;
+}
+.dice {
+  width: 44px;
+  height: 44px;
+  position: relative;
+  transform-style: preserve-3d;
+  transition: transform 1.2s ease-out;
+}
+.dice .face {
+  position: absolute;
+  width: 44px;
+  height: 44px;
+  background: #f0f0f0;
+  border: 2px solid #cccccc;
+  border-radius: 8px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  padding: 4px;
+  box-sizing: border-box;
+  backface-visibility: hidden;
+  box-shadow: inset 0 0 8px rgba(0,0,0,0.15);
+}
+.dice .face > div {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.dice .pip {
+  width: 7px;
+  height: 7px;
+  background: #1a1a2e;
+  border-radius: 50%;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.4);
+}
+
+.front  { transform: translateZ(22px); }
+.back   { transform: rotateY(180deg)  translateZ(22px); }
+.right  { transform: rotateY(90deg)   translateZ(22px); }
+.left   { transform: rotateY(-90deg)  translateZ(22px); }
+.top    { transform: rotateX(90deg)   translateZ(22px); }
+.bottom { transform: rotateX(-90deg)  translateZ(22px); }
+
+.rolling { animation: tumble 0.6s ease-in-out; }
+
+@keyframes tumble {
+  0%   { transform: rotateX(0deg)   rotateY(0deg); }
+  15%  { transform: rotateX(180deg) rotateY(120deg); }
+  30%  { transform: rotateX(90deg)  rotateY(270deg); }
+  50%  { transform: rotateX(270deg) rotateY(180deg); }
+  70%  { transform: rotateX(360deg) rotateY(90deg); }
+  85%  { transform: rotateX(450deg) rotateY(360deg); }
+  100% { transform: rotateX(540deg) rotateY(450deg); }
+}
+
 .dice-over.rolling { animation: diceIn .3s ease, dicePulse .22s ease-in-out infinite alternate; }
 .dice-hint { font-size: .62rem; color: var(--muted); }
-
-@keyframes die3dRoll {
-  0% { transform: rotateX(0deg) rotateY(0deg); }
-  100% { transform: rotateX(360deg) rotateY(720deg); }
-}
+.dice-total { font-size: .64rem; color: var(--accent); font-weight: 700; min-height: 12px; }
+.dice-doubles { font-size: .62rem; color: var(--green); font-weight: 700; }
+.hidden { display: none !important; }
 
 @keyframes dicePulse {
   from { box-shadow: 0 0 0 rgba(0,0,0,0); }

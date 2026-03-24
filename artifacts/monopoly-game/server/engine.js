@@ -1422,10 +1422,15 @@ export function applyLobbyBoardChange(spaces, change) {
     const sp = props.find(p => p.name === fromCity);
     if (!sp) return board;
     const sourceCountry = countriesByCode.get(String(sp.countryCode || "").toLowerCase());
-    if (!sourceCountry || !sourceCountry.cities.includes(toCity)) return board;
     sp.name = toCity;
-    const cityIndex = Math.max(0, sourceCountry.cities.indexOf(toCity));
-    const nextPrice = sourceCountry.base + cityIndex * 10;
+    let nextPrice = Number(sp.price || 0);
+    if (sourceCountry) {
+      const cityIndex = Math.max(0, sourceCountry.cities.indexOf(toCity));
+      nextPrice = sourceCountry.base + cityIndex * 10;
+    }
+    if (!Number.isFinite(nextPrice) || nextPrice <= 0) {
+      nextPrice = 100;
+    }
     sp.price = nextPrice;
     sp.rents = buildRents(nextPrice);
     sp.houseCost = Math.max(50, Math.floor(nextPrice * 0.5));

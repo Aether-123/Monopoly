@@ -51,6 +51,23 @@ let editorCustomSpaces=null; // custom board from editor
 const CUR=()=>gs?.settings?.currency||"$";
 const DF=["⚀","⚁","⚂","⚃","⚄","⚅"];
 const GRP_COLORS=["#ef4444","#f97316","#22c55e","#3b82f6","#a855f7","#ec4899","#14b8a6","#6366f1"];
+const DICE_FACE_TRANSFORMS={
+  1:"rotateX(720deg) rotateY(720deg)",
+  2:"rotateX(630deg) rotateY(720deg)",
+  3:"rotateX(720deg) rotateY(810deg)",
+  4:"rotateX(720deg) rotateY(630deg)",
+  5:"rotateX(810deg) rotateY(720deg)",
+  6:"rotateX(720deg) rotateY(900deg)",
+};
+const DICE_PIP_PATTERN={
+  1:[0,0,0,0,1,0,0,0,0],
+  2:[0,0,1,0,0,0,1,0,0],
+  3:[0,0,1,0,1,0,1,0,0],
+  4:[1,0,1,0,0,0,1,0,1],
+  5:[1,0,1,0,1,0,1,0,1],
+  6:[1,0,1,1,0,1,1,0,1],
+};
+const DICE_FACE_VALUE_BY_CLASS={front:1,back:6,right:3,left:4,top:5,bottom:2};
 const COUNTRY_CODE_BY_NAME={
   "Nigeria":"ng","Pakistan":"pk","Bangladesh":"bd","Egypt":"eg","Philippines":"ph","Turkey":"tr","Thailand":"th","Indonesia":"id","Argentina":"ar","Poland":"pl","Mexico":"mx","Brazil":"br","China":"cn","Spain":"es","Italy":"it","South Korea":"kr","Russia":"ru","Canada":"ca","Australia":"au","France":"fr","Germany":"de","United Kingdom":"gb","India":"in","Japan":"jp","Netherlands":"nl","United States":"us","Singapore":"sg","Switzerland":"ch"
 };
@@ -148,12 +165,29 @@ function flagImg(countryCode,countryFlag,countryName,cls="flag-inline"){
   const code=String(countryCode||"").toLowerCase();
   if(!code)return countryFlag||"";
   const nm=sanitize(countryName||COUNTRY_NAME_BY_CODE[code]||"Country",40);
-  return `<img class="${cls}" src="flags/16x12/${code}.png" alt="${nm} flag" onerror="this.onerror=null;this.replaceWith(document.createTextNode('${countryFlag||"🏳️"}'))">`;
+  return `<img class="${cls}" src="flags/svg/${code}.svg" alt="${nm} flag" onerror="if(!this.dataset.fbk){this.dataset.fbk='1';this.src='flags/16x12/${code}.png';return;}this.onerror=null;this.replaceWith(document.createTextNode('${countryFlag||"🏳️"}'))">`;
 }
 function setDieFace(el, face){
   if(!el)return;
   const f=Math.max(1,Math.min(6,parseInt(face||1)));
   el.setAttribute("data-face",String(f));
+  const tx=DICE_FACE_TRANSFORMS[f]||DICE_FACE_TRANSFORMS[1];
+  el.style.transform=tx;
+}
+function _buildFacePips(faceEl,val){
+  const pattern=DICE_PIP_PATTERN[val]||DICE_PIP_PATTERN[1];
+  faceEl.innerHTML=pattern.map(on=>`<div>${on?'<div class="pip"></div>':""}</div>`).join("");
+}
+function initDiceFaces(){
+  ["die1","die2"].forEach(id=>{
+    const die=qid(id);
+    if(!die)return;
+    Object.entries(DICE_FACE_VALUE_BY_CLASS).forEach(([cls,val])=>{
+      const face=die.querySelector(`.face.${cls}`);
+      if(face)_buildFacePips(face,val);
+    });
+    setDieFace(die,1);
+  });
 }
 function getLobbyBoardSpaces(){
   return lobbyData?.mapConfig?.spaces||[];
@@ -604,6 +638,7 @@ function renderBoard(){
       const cCode=getCountryCode(sp);
       const cName=getCountryName(sp);
       let ico=isHaz?"☠️":isTR?"$":isRT?"🎲":(ICONS[sp?.type]||"🏙️");
+      if(sp?.type==="property")ico=flagImg(cCode,cFlag,cName,"tile-flag-icon");
 
       // Owner: colored border glow + ownership dot — only when owned
       let ownerDot="";
@@ -1095,32 +1130,45 @@ function updateDiceOver(){
     else hint.textContent="🎲 Click to Roll!";
   }
   if(gs?.lastRoll){
-    setDieFace(qid("d1"),gs.lastRoll[0]);
-    setDieFace(qid("d2"),gs.lastRoll[1]);
+    const die1=qid("die1"),die2=qid("die2");
+    setDieFace(die1,gs.lastRoll[0]);
+    setDieFace(die2,gs.lastRoll[1]);
+    const total=(gs.lastRoll[0]||0)+(gs.lastRoll[1]||0);
+    const totalEl=qid("dice-total");
+    if(totalEl)totalEl.textContent=`Total: ${total}`;
+    const dbl=qid("doubles-badge");
+    if(dbl){
+      if(gs.lastRoll[0]===gs.lastRoll[1])dbl.classList.remove("hidden");
+      else dbl.classList.add("hidden");
+    }
   }
 }
 
-function animDice(cb){
-  const d1=qid("d1"),d2=qid("d2");
-  if(!d1||!d2){if(cb)cb();return;}
-  if(_diceRolling)return;
-  _diceRolling=true;
-  const over=qid("dice-over");
-  d1.classList.add("rolling");
-  d2.classList.add("rolling");
-  over?.classList.add("rolling");
-  let n=0;const iv=setInterval(()=>{
-    setDieFace(d1,1+Math.floor(Math.random()*6));
-    setDieFace(d2,1+Math.floor(Math.random()*6));
-    if(++n>11){
-      clearInterval(iv);
-      d1.classList.remove("rolling");
-      d2.classList.remove("rolling");
-      over?.classList.remove("rolling");
-      _diceRolling=false;
-      setTimeout(()=>{if(cb)cb();},120);
-    }
-  },75);
+async function animateDice(val1,val2){
+  const die1=qid("die1"),die2=qid("die2");
+  if(!die1||!die2)return;
+
+  die1.style.transition="none";
+  die2.style.transition="none";
+  die1.style.transform="rotateX(0deg) rotateY(0deg)";
+  die2.style.transform="rotateX(0deg) rotateY(0deg)";
+
+  void die1.offsetWidth;
+
+  die1.classList.add("rolling");
+  die2.classList.add("rolling");
+  qid("dice-over")?.classList.add("rolling");
+  await sleep(600);
+
+  die1.classList.remove("rolling");
+  die2.classList.remove("rolling");
+  qid("dice-over")?.classList.remove("rolling");
+
+  die1.style.transition="transform 1.2s ease-out";
+  die2.style.transition="transform 1.2s ease-out";
+  setDieFace(die1,val1);
+  setDieFace(die2,val2);
+  await sleep(1200);
 }
 
 function _renderActionsCore(){
@@ -1395,7 +1443,8 @@ function showPropModal(pos){
   const canCreditBuy=isBuyPhase&&!own&&cc?.active&&(cc.limit-cc.used)>=(sp.price||0);
   const modalFlag=flagImg(sp.countryCode,sp.countryFlag,sp.countryName,"flag-inline-md");
   const canManageMortgage=own&&me&&own.id===myId&&isMyTurn;
-  const canManageHouses=canManageMortgage&&sp.type==="property"&&!sp.mortgaged;
+  const isMyProperty=own&&me&&own.id===myId&&sp.type==="property";
+  const canManageHouses=isMyProperty&&!sp.mortgaged;
   const mortgagedAmount=Math.floor((sp.price||0)*0.75);
   const unmortgageCost=mortgagedAmount+Math.ceil(mortgagedAmount*0.05);
   const propertySet=(canManageHouses
@@ -1412,9 +1461,9 @@ function showPropModal(pos){
   const canBuildSet=!needsMonopoly||hasSet;
   const houseCost=Math.max(0,sp.houseCost||0);
   const sellRefund=Math.floor(houseCost/2);
-  const canBuildHouse=canManageHouses&&canBuildSet&&houseCost>0&&(sp.houses||0)<5&&(me.money>=houseCost)&&(!gs.settings?.evenBuild||(sp.houses||0)<=minSetH);
-  const canSellHouse=canManageHouses&&(sp.houses||0)>0&&(!gs.settings?.evenBuild||(sp.houses||0)>=maxSetH);
-  const houseControlsHTML=canManageHouses?`
+  const canBuildHouse=canManageHouses&&isMyTurn&&canBuildSet&&houseCost>0&&(sp.houses||0)<5&&(me.money>=houseCost)&&(!gs.settings?.evenBuild||(sp.houses||0)<=minSetH);
+  const canSellHouse=canManageHouses&&isMyTurn&&(sp.houses||0)>0&&(!gs.settings?.evenBuild||(sp.houses||0)>=maxSetH);
+  const houseControlsHTML=isMyProperty?`
     <div style="margin-top:.55rem;padding:.5rem;border:1px solid var(--border);border-radius:8px;background:var(--bg)">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:.45rem">
         <div style="font-size:.74rem;color:var(--muted)">Houses: <b style="color:var(--txt)">${sp.houses||0}</b>/5</div>
@@ -1425,6 +1474,7 @@ function showPropModal(pos){
       </div>
       ${needsMonopoly&&!hasSet?`<div style="font-size:.7rem;color:var(--red);margin-top:.3rem">Own the full country set to build.</div>`:""}
       ${gs.settings?.evenBuild?`<div style="font-size:.7rem;color:var(--muted);margin-top:.3rem">Even-build rule is active.</div>`:""}
+      ${!isMyTurn?`<div style="font-size:.7rem;color:var(--muted);margin-top:.3rem">House actions available on your turn.</div>`:""}
       <div style="font-size:.7rem;color:var(--muted);margin-top:.25rem">Demolish refund: 50% of house cost.</div>
     </div>`:"";
   const mortgageHTML=canManageMortgage
@@ -1499,17 +1549,22 @@ function showRailModal(){
 }
 function showBuildModal(){
   const me=gs.players.find(p=>p.id===myId);
-  const buildable=gs.board.filter(s=>{
-    if(s.type!=="property"||s.owner!==me.id||s.mortgaged)return false;
-    if(gs.settings.housingRule==="monopoly"&&!gs.board.filter(x=>x.group===s.group&&x.type==="property").every(x=>x.owner===me.id))return false;
-    return(s.houses||0)<5;
-  });
+  const myProps=gs.board.filter(s=>s.type==="property"&&s.owner===me.id);
   qid("build-c").innerHTML=`<h2>🏗️ Build / Sell</h2>
     <p style="font-size:.78rem;color:var(--muted)">Cash: ${CUR()}${me.money}</p>
-    ${!buildable.length?`<p style="color:var(--muted);font-size:.8rem">No buildable properties (need full colour group).</p>`:""}
+    ${!myProps.length?`<p style="color:var(--muted);font-size:.8rem">No owned properties.</p>`:""}
     <div style="display:flex;flex-direction:column;gap:.35rem">
-      ${buildable.map(s=>{
+      ${myProps.map(s=>{
         const h=s.houses||0,gi=parseInt(s.group.slice(1));
+        const cCode=getCountryCode(s);
+        const set=(cCode
+          ?gs.board.filter(x=>x.type==="property"&&getCountryCode(x)===cCode)
+          :gs.board.filter(x=>x.type==="property"&&x.group===s.group));
+        const hasSet=set.length>1&&set.every(x=>x.owner===me.id);
+        const minH=set.length?Math.min(...set.map(x=>x.houses||0)):0;
+        const maxH=set.length?Math.max(...set.map(x=>x.houses||0)):0;
+        const canBuild=!s.mortgaged&&(gs.settings.housingRule!=="monopoly"||hasSet)&&h<5&&me.money>=(s.houseCost||0)&&(!gs.settings.evenBuild||h<=minH);
+        const canSell=!s.mortgaged&&h>0&&(!gs.settings.evenBuild||h>=maxH);
         return`<div style="background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:.48rem .55rem">
           <div style="display:flex;align-items:center;gap:.38rem;margin-bottom:.28rem">
             <div style="width:9px;height:9px;border-radius:50%;background:${GRP_COLORS[gi]}"></div>
@@ -1517,9 +1572,10 @@ function showBuildModal(){
             <span style="font-size:.68rem;color:var(--muted)">${h<5?h+"h":"🏨"}</span>
           </div>
           <div style="display:flex;gap:.28rem">
-            ${h<5?`<button class="btn btn-sm btn-grn" onclick="ga('build',{position:${s.pos}})">Build ${CUR()}${s.houseCost}</button>`:""}
-            ${h>0?`<button class="btn btn-sm btn-red" onclick="ga('sell_house',{position:${s.pos}})">Sell ${CUR()}${Math.floor(s.houseCost/2)}</button>`:""}
+            <button class="btn btn-sm btn-red" ${canSell?"":"disabled"} onclick="ga('sell_house',{position:${s.pos}})">− ${CUR()}${Math.floor((s.houseCost||0)/2)}</button>
+            <button class="btn btn-sm btn-grn" ${canBuild?"":"disabled"} onclick="ga('build',{position:${s.pos}})">+ ${CUR()}${s.houseCost||0}</button>
           </div>
+          ${gs.settings.housingRule==="monopoly"&&!hasSet?`<div style="font-size:.68rem;color:var(--red);margin-top:.25rem">Need full country set</div>`:""}
         </div>`;
       }).join("")}
     </div>
@@ -1663,7 +1719,7 @@ function renderMiniBoard(containerId, spaces, size){
       const city=sanitize(sp.name||"City",32);
       const country=getCountryName(sp);
       const flag=cc
-        ?`<img class="mini-flag-img" src="flags/16x12/${cc}.png" alt="${country}" onerror="this.onerror=null;this.replaceWith(document.createTextNode('${sanitize(sp.countryFlag||"🏳️",4)}'))">`
+        ?`<img class="mini-flag-img" src="flags/svg/${cc}.svg" alt="${country}" onerror="if(!this.dataset.fbk){this.dataset.fbk='1';this.src='flags/16x12/${cc}.png';return;}this.onerror=null;this.replaceWith(document.createTextNode('${sanitize(sp.countryFlag||"🏳️",4)}'))">`
         :`<span class="mini-flag-fallback">${sanitize(sp.countryFlag||"🏳️",4)}</span>`;
       return `<div class="mini-prop-wrap">${flag}<div class="mini-city" title="${city}">${city}</div><div class="mini-country" title="${country}">${country}</div></div>`;
     }
@@ -1714,6 +1770,13 @@ function lobbyRefreshChangeOptions(){
     );
     options=(country?.cities||[]).filter(c=>c!==chosen);
   }
+  if(!options.length&&source?.countryCode){
+    options=props.filter(p=>String(p.countryCode||"").toLowerCase()===String(source.countryCode||"").toLowerCase()&&p.name!==chosen).map(p=>p.name);
+  }
+  if(!options.length){
+    options=_wwCountries.flatMap(c=>c.cities||[]).filter(c=>c!==chosen);
+  }
+  options=[...new Set(options)];
   toSel.innerHTML=options.map(c=>`<option value='${c}'>${c}</option>`).join("");
 }
 
@@ -2024,7 +2087,20 @@ function joinSpecific(roomId){
   closeBrowse();
 }
 
-function rollDice(){animDice(()=>ga("roll"));}
+async function rollDice(){
+  if(_diceRolling)return;
+  const isMT=gs?.players?.[gs.currentPlayerIdx]?.id===myId;
+  if(gs?.phase!=="roll"||!isMT)return;
+  _diceRolling=true;
+  try{
+    const val1=1+Math.floor(Math.random()*6);
+    const val2=1+Math.floor(Math.random()*6);
+    await animateDice(val1,val2);
+    ga("roll");
+  }finally{
+    _diceRolling=false;
+  }
+}
 function sendChat(){
   const inGame=qid("sc-game").classList.contains("active");
   const inp=inGame?qid("chat-inp"):qid("lc-inp");
@@ -2694,6 +2770,7 @@ window.addEventListener("DOMContentLoaded",()=>{
     if(themes[i]===currentTheme)b.classList.add("active");
   });
   initSocket();
+  initDiceFaces();
   generateSeed();updateBoardPreview();
   // Restore name
   const saved=localStorage.getItem("mono_name");
