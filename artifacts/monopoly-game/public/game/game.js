@@ -117,6 +117,14 @@ function playClickSound(){
 }
 
 function sanitize(s,n=200){return String(s||"").replace(/[<>&"']/g,"").trim().slice(0,n);}
+function escHtml(s){
+  return String(s??"")
+    .replace(/&/g,"&amp;")
+    .replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;")
+    .replace(/'/g,"&#39;");
+}
 function calcTieredRents(price){
   const p=Math.max(0,Number(price)||0);
   const bands=[
@@ -1747,19 +1755,24 @@ function lobbyRefreshChangeOptions(){
   const fromSel=qid("lobby-change-from");
   const toSel=qid("lobby-change-to");
   if(!fromSel||!toSel)return;
+  const prevFrom=fromSel.value;
+  const prevTo=toSel.value;
   const props=spaces.filter(s=>s.type==="property");
   if(!props.length){fromSel.innerHTML="";toSel.innerHTML="";return;}
 
   if(kind==="country"){
     const current=[...new Map(props.filter(p=>p.countryCode&&p.countryName).map(p=>[p.countryCode,{code:p.countryCode,name:p.countryName,flag:p.countryFlag||""}])).values()];
     const all=[...new Map(_wwCountries.map(c=>[c.code,c])).values()];
-    fromSel.innerHTML=current.map(c=>`<option value='${c.code}'>${c.flag||"🌍"} ${c.name}</option>`).join("");
-    toSel.innerHTML=all.map(c=>`<option value='${c.code}'>${c.flag||"🌍"} ${c.name}</option>`).join("");
+    fromSel.innerHTML=current.map(c=>`<option value="${escHtml(c.code)}">${escHtml(`${c.flag||"🌍"} ${c.name}`)}</option>`).join("");
+    toSel.innerHTML=all.map(c=>`<option value="${escHtml(c.code)}">${escHtml(`${c.flag||"🌍"} ${c.name}`)}</option>`).join("");
+    if(prevFrom && [...fromSel.options].some(o=>o.value===prevFrom))fromSel.value=prevFrom;
+    if(prevTo && [...toSel.options].some(o=>o.value===prevTo))toSel.value=prevTo;
     return;
   }
 
   const cities=props.map(p=>({name:p.name,countryCode:p.countryCode,countryName:p.countryName}));
-  fromSel.innerHTML=cities.map(c=>`<option value='${c.name}'>${c.name}</option>`).join("");
+  fromSel.innerHTML=cities.map(c=>`<option value="${escHtml(c.name)}">${escHtml(c.name)}</option>`).join("");
+  if(prevFrom && [...fromSel.options].some(o=>o.value===prevFrom))fromSel.value=prevFrom;
   const chosen=fromSel.value||cities[0].name;
   const source=props.find(p=>p.name===chosen);
   let options=[];
@@ -1777,7 +1790,8 @@ function lobbyRefreshChangeOptions(){
     options=_wwCountries.flatMap(c=>c.cities||[]).filter(c=>c!==chosen);
   }
   options=[...new Set(options)];
-  toSel.innerHTML=options.map(c=>`<option value='${c}'>${c}</option>`).join("");
+  toSel.innerHTML=options.map(c=>`<option value="${escHtml(c)}">${escHtml(c)}</option>`).join("");
+  if(prevTo && [...toSel.options].some(o=>o.value===prevTo))toSel.value=prevTo;
 }
 
 function requestLobbyBoardChange(){

@@ -628,11 +628,12 @@ function normalizeMapConfig(mapCfg) {
   const size = Math.max(6, Math.min(parseInt(cfg.tilesPerSide || "9"), 10));
   const preset = String(cfg.preset || "").toLowerCase();
   const skipEdgeRule = DOMESTIC_PRESETS.has(preset);
+  const shouldApplyEdgeRule = !skipEdgeRule && preset !== "worldwide";
   cfg.tilesPerSide = size;
   if (Array.isArray(cfg.spaces) && cfg.spaces.length) {
     cfg.spaces = E.enforceBoardLayoutConstraints(cfg.spaces, size);
     // Apply normalization rules to custom editor boards too
-    if (!skipEdgeRule) {
+    if (shouldApplyEdgeRule) {
       cfg.spaces = applyEdgeCountrySetRule(cfg.spaces, { seedSalt: cfg.seed || "" });
       cfg.spaces = applyFortyFourInfrastructureRule(cfg.spaces);
       cfg.spaces = applyFortyFourWestTaxFallback(cfg.spaces, { seedSalt: cfg.seed || "" });
@@ -674,7 +675,7 @@ function normalizeMapConfig(mapCfg) {
         sp.houseCost = Math.max(50, Math.floor(price * 0.5));
       });
       cfg.spaces = E.enforceBoardLayoutConstraints(board, size);
-      if (!skipEdgeRule) {
+      if (shouldApplyEdgeRule) {
         cfg.spaces = applyEdgeCountrySetRule(cfg.spaces, { seedSalt: cfg.seed || "" });
         cfg.spaces = applyFortyFourInfrastructureRule(cfg.spaces);
         cfg.spaces = applyFortyFourWestTaxFallback(cfg.spaces, { seedSalt: cfg.seed || "" });
@@ -700,7 +701,7 @@ function normalizeMapConfig(mapCfg) {
 
   if (cfg.preset === "random" && cfg.seed && cfg.mode) {
     cfg.spaces = E.enforceBoardLayoutConstraints(E.generateRandomBoard(String(cfg.seed), String(cfg.mode), size), size);
-    if (!skipEdgeRule) {
+    if (shouldApplyEdgeRule) {
       cfg.spaces = applyEdgeCountrySetRule(cfg.spaces, { seedSalt: cfg.seed });
       cfg.spaces = applyFortyFourInfrastructureRule(cfg.spaces);
       cfg.spaces = applyFortyFourWestTaxFallback(cfg.spaces, { seedSalt: cfg.seed });
@@ -712,7 +713,7 @@ function normalizeMapConfig(mapCfg) {
   }
 
   cfg.spaces = E.enforceBoardLayoutConstraints(E.generateDefaultBoard(size), size);
-  if (!skipEdgeRule) {
+  if (shouldApplyEdgeRule) {
     cfg.spaces = applyEdgeCountrySetRule(cfg.spaces);
     cfg.spaces = applyFortyFourInfrastructureRule(cfg.spaces);
     cfg.spaces = applyFortyFourWestTaxFallback(cfg.spaces);
