@@ -168,6 +168,7 @@ export const DOMESTIC_MAPS = {
 export function defaultSettings() {
   return {
     currency:"$", startingCash:1500, goSalary:200,
+    startTileBonusPercent:150,
     airportFee:100, travelFee:150, railwayFee:75,
     incomeTaxRate:10, propertyTaxRate:2,
     propertyTaxPerHouse:5, propertyTaxPerHotel:20,
@@ -177,7 +178,7 @@ export function defaultSettings() {
     creditCardLimit:500, creditCardRounds:2,
     insurancePremium:50, insurancePayout:75,
     govGrantAmount:200, govBailoutAmount:200,
-    evenBuild:true, mortgageEnabled:true, auctionMode:false,
+    evenBuild:true, mortgageEnabled:true, auctionMode:"buy_pass",
     doubleRentOnSet:true,
     noRentInJail:true, treasurePot:true,
     housingRule:"monopoly", maxPlayers:6, privateRoom:false,
@@ -221,13 +222,29 @@ function makeRng(seedStr) {
 // ════════════════════════════════════════════════
 export function initGame(room) {
   const S = (room.mapConfig || {}).tilesPerSide || 9;
-  const board = (room.mapConfig || {}).spaces || generateDefaultBoard(S);
+  const rawBoard = (room.mapConfig || {}).spaces || generateDefaultBoard(S);
+  const board = Array.isArray(rawBoard) && rawBoard.length >= 24
+    ? rawBoard.map((sp, idx) => ({ ...(sp || {}), pos: idx }))
+    : enforceBoardLayoutConstraints(rawBoard, S);
   const players = room.players.map(p => mkGamePlayer(p, room.settings));
+  const startPos = board.find(s => s.type === "go")?.pos ?? 0;
+  players.forEach(pl => { pl.position = startPos; });
   const propPositions = board.filter(s => s.type === "property").map(s => s.pos);
   const taxReturnPool = sample(propPositions, Math.min(6, propPositions.length));
   const remaining = propPositions.filter(p => !taxReturnPool.includes(p));
   const rndTaxPool = sample(remaining, Math.min(8, remaining.length));
-  const hazardPool = board.filter(s => s.type === "chance").map(s => s.pos);
+  
+  // Build hazard pool from chance/chest tiles; if none exist, use a sample of properties
+  let hazardPool = board.filter(s => s.type === "chance" || s.type === "chest").map(s => s.pos);
+  if (hazardPool.length === 0 && propPositions.length > 0) {
+    // Fallback: sample 4-8 properties as hazard zones if no chance/chest tiles exist
+    hazardPool = sample(propPositions, Math.min(Math.max(4, Math.floor(propPositions.length / 4)), 8));
+  }
+  if (hazardPool.length === 0) {
+    // Last resort: use board positions 5, 10, 15, 20 if available
+    hazardPool = [5, 10, 15, 20].filter(p => p < board.length && board[p]);
+  }
+  
   const chanceDeck = shuffle([...SURPRISE_CARDS]);
   const chestDeck  = shuffle([...CHEST_CARDS]);
   return {
@@ -237,6 +254,7 @@ export function initGame(room) {
     log: [`🎲 Game started! ${players[0].name} goes first.`],
     settings: { ...room.settings },
     chanceDeck, chestDeck, chanceIdx: 0, chestIdx: 0, winner: null,
+    startPos,
     treasurePot: room.settings.treasurePot ? 0 : null,
     hazardPos: hazardPool[0] ?? 7,
     hazardPool,
@@ -260,6 +278,7 @@ function mkGamePlayer(p, s) {
     jailCards: 0, govProtCards: 0, bankrupted: false, disconnected: false,
     bankDeposit: 0, bankDepositInterest: 0, loans: [], creditCard: null,
     hasInsurance: false,
+    turnDoublesCount: 0,
     vacationTurns: 0,
     pendingHazardLoss: 0, pendingHazardHouses: 0, pendingHazardRebuildCost: 0,
     totalEarned: s.startingCash,
@@ -277,7 +296,7 @@ export function processAction(gs, pi, action, data) {
   switch (action) {
     case "roll":            doRoll(gs, pi); break;
     case "buy":             doBuy(gs, pi); break;
-    case "pass":            gs.phase = "action"; break;
+    case "pass":            doEndTurn(gs, pi); break;
     case "end_turn":        doEndTurn(gs, pi); break;
     case "build":           doBuild(gs, pi, data); break;
     case "sell_house":      doSellHouse(gs, pi, data); break;
@@ -365,9 +384,11 @@ function doRoll(gs, idx) {
     }
   } else {
     if (doubles) {
-      gs.doublesCount++;
-      if (gs.doublesCount >= 3) { sendJail(gs, idx); gs.phase = "action"; return; }
+      p.turnDoublesCount = (p.turnDoublesCount || 0) + 1;
+      gs.doublesCount = (gs.doublesCount || 0) + 1;
+      if ((p.turnDoublesCount || 0) >= 3) { sendJail(gs, idx); gs.phase = "action"; return; }
     } else {
+      p.turnDoublesCount = 0;
       gs.doublesCount = 0;
     }
   }
@@ -434,8 +455,15 @@ function seizeCollateral(gs, idx, amount) {
 // ════════════════════════════════════════════════
 function movePlayer(gs, idx, steps) {
   const p = gs.players[idx]; const prev = p.position;
-  p.position = (p.position + steps) % gs.board.length;
-  if (p.position < prev && steps > 0) {
+  const total = gs.board.length;
+  const startPos = gs.startPos ?? 0;
+  p.position = (p.position + steps) % total;
+  const end = prev + steps;
+  const passedStart = steps > 0 && (
+    (prev < startPos && end >= startPos) ||
+    (end >= total + startPos)
+  );
+  if (passedStart && p.position !== startPos) {
     earnMoney(gs, idx, gs.settings.goSalary, "GO salary");
     if (gs.treasurePot !== null && gs.treasurePot !== undefined) {
       gs.treasurePot = (gs.treasurePot || 0) + 50;
@@ -458,15 +486,18 @@ function landOn(gs, idx) {
   if (pos === gs.randomTaxPos) { landRandomTax(gs, idx); return; }
   const t = sp.type; const s = gs.settings;
   if (t === "tax_return") { landTaxReturn(gs, idx); gs.phase = "action"; return; }
-  if (t === "go")                  gs.phase = "action";
+  if (t === "go") {
+    const bonusPct = Number(gs.settings.startTileBonusPercent || 0);
+    const bonus = Math.max(0, Math.floor((gs.settings.goSalary || 0) * (bonusPct / 100)));
+    if (bonus > 0) earnMoney(gs, idx, bonus, `START tile bonus (${bonusPct}%)`);
+    gs.phase = "action";
+  }
   else if (t === "jail")           gs.phase = "action";
   else if (t === "free_parking") {
     const pot = gs.treasurePot;
     if (pot) { earnMoney(gs, idx, pot, "Treasure Pot"); gs.treasurePot = 0; }
-    if (gs.settings.treasurePot) {
-      p.vacationTurns = Math.max(p.vacationTurns || 0, 1);
-      gs.log.push(`🏖️ ${p.name} starts vacation and will miss next turn.`);
-    }
+    p.vacationTurns = Math.max(p.vacationTurns || 0, 1);
+    gs.log.push(`🏖️ ${p.name} starts vacation and will miss next turn.`);
     gs.phase = "action";
   }
   else if (t === "go_to_jail")     { sendJail(gs, idx); gs.phase = "action"; }
@@ -494,7 +525,7 @@ function landOn(gs, idx) {
   }
   else if (t === "airport") {
     if (!sp.owner) gs.phase = "buy";
-    else { payAirportFee(gs, idx, sp); gs.phase = "air_travel"; }
+    else { payAirportRent(gs, idx, sp, "airport rent"); gs.phase = "air_travel"; }
   }
   else if (t === "railway") {
     if (!sp.owner) gs.phase = "buy";
@@ -521,13 +552,17 @@ function payRentCheck(gs, idx, sp) {
   gs.phase = "action";
 }
 
-function payAirportFee(gs, idx, sp) {
+function calcAirportRent(gs, ownerId) {
+  const cnt = gs.board.filter(s => s.type === "airport" && s.owner === ownerId).length;
+  return cnt >= 2 ? 200 : 100;
+}
+
+function payAirportRent(gs, idx, sp, label = "airport rent") {
   const p = gs.players[idx];
   const own = gs.players.find(q => q.id === sp.owner);
   if (!own || own.id === p.id || own.bankrupted || sp.mortgaged) return;
-  const cnt = gs.board.filter(s => s.type === "airport" && s.owner === own.id).length;
-  const fee = gs.settings.airportFee * cnt;
-  chargeMoney(gs, idx, fee, `airport fee to ${own.name}`); own.money += fee;
+  const fee = calcAirportRent(gs, own.id);
+  chargeMoney(gs, idx, fee, `${label} to ${own.name}`); own.money += fee;
 }
 
 function payRailwayFee(gs, idx, sp) {
@@ -614,8 +649,6 @@ function applyHazard(gs, idx) {
   }
   p.pendingHazardLoss += lostMoney; p.pendingHazardHouses += lostHouses; p.pendingHazardRebuildCost += lostRebuild;
   chkBankrupt(gs, idx);
-  const pool = gs.hazardPool.filter(pos => pos !== gs.hazardPos);
-  if (pool.length) gs.hazardPos = pick(pool);
   gs.pendingEvent = {type:"hazard",hazard:haz,lostMoney,lostHouses,lostRebuildCost:lostRebuild,hasInsurance:p.hasInsurance||false};
   gs.phase = "hazard_event";
 }
@@ -678,8 +711,9 @@ function applyCard(gs, idx, card, surprise) {
     }
   }
   else if (a === "goto") {
-    p.position = card.position;
-    if (card.position === 0) earnMoney(gs, idx, gs.settings.goSalary, "GO");
+    const startPos = gs.startPos ?? 0;
+    const targetPos = (card.position === 0) ? startPos : card.position;
+    p.position = targetPos;
     landOn(gs, idx); return;
   }
   else if (a === "jail")          { sendJail(gs, idx); gs.phase = "action"; return; }
@@ -709,6 +743,8 @@ function applyCard(gs, idx, card, surprise) {
 // ════════════════════════════════════════════════
 function doBuy(gs, idx) {
   const p = gs.players[idx]; const sp = gs.board[p.position];
+  const mode = gs.settings?.auctionMode || "buy_pass";
+  if (mode === "auction_only") return;
   if (!sp || sp.owner) { gs.phase = "action"; return; }
   const cc = p.creditCard; const ccRoom = (cc && cc.active) ? (cc.limit - (cc.used||0)) : 0;
   if (p.money + ccRoom < sp.price) { gs.phase = "action"; return; }
@@ -805,11 +841,16 @@ function doUseGovProt(gs, idx) {
 function doTravelAir(gs, idx, data) {
   const p = gs.players[idx]; const destPos = data.destPos;
   if (destPos == null || destPos >= gs.board.length) return;
+  const from = gs.board[p.position];
   const dest = gs.board[destPos];
   if (!dest || dest.type !== "airport") return;
-  chargeMoney(gs, idx, gs.settings.travelFee, "air travel");
-  if (gs.treasurePot !== null && gs.treasurePot !== undefined) gs.treasurePot = (gs.treasurePot||0) + gs.settings.travelFee;
-  p.position = destPos; gs.log.push(`✈️ ${p.name} flew to ${dest.name}`); gs.phase = "action";
+  p.position = destPos;
+  gs.log.push(`✈️ ${p.name} flew to ${dest.name}`);
+  if ((from?.label === "south") && (dest?.label === "north")) {
+    earnMoney(gs, idx, gs.settings.goSalary, "South→North airport GO salary");
+  }
+  payAirportRent(gs, idx, dest, "destination airport rent");
+  gs.phase = "action";
 }
 
 function doTravelRail(gs, idx, data) {
@@ -991,13 +1032,15 @@ export function nextTurn(gs) {
     }
     break;
   }
+  if (gs.players[n]) gs.players[n].turnDoublesCount = 0;
   Object.assign(gs, {currentPlayerIdx:n, phase:"roll", doublesCount:0});
   gs.turnInRound++;
   const alive = gs.players.filter(p => !p.bankrupted);
   if (gs.turnInRound >= alive.length) {
     gs.round++; gs.turnInRound = 0;
-    const pool = gs.hazardPool.filter(p => p !== gs.hazardPos);
-    if (pool.length) gs.hazardPos = pick(pool);
+    // Rotate hazard zone at the end of each complete round (after all players go)
+    const hzPool = gs.hazardPool.filter(p => p !== gs.hazardPos);
+    if (hzPool.length) gs.hazardPos = pick(hzPool);
     if (gs.round - gs.taxReturnLastMoved >= gs.settings.taxReturnMoveEvery) {
       const pool2 = gs.taxReturnPool.filter(p => p !== gs.taxReturnPos);
       if (pool2.length) { gs.taxReturnPos = pick(pool2); gs.taxReturnLastMoved = gs.round; }
@@ -1026,12 +1069,12 @@ export function execTrade(gs, fi, ti, offer) {
 function buildRents(price) {
   const p = Math.max(0, Number(price) || 0);
   const bands = [
-    {max:80, lo:6, hi:10},
-    {max:140, lo:10, hi:20},
-    {max:200, lo:20, hi:35},
-    {max:260, lo:35, hi:55},
-    {max:330, lo:55, hi:80},
-    {max:Infinity, lo:80, hi:120},
+    {max:80, lo:6, hi:9},
+    {max:140, lo:9, hi:15},
+    {max:200, lo:15, hi:24},
+    {max:260, lo:24, hi:35},
+    {max:330, lo:35, hi:48},
+    {max:Infinity, lo:48, hi:70},
   ];
   let minP = 0;
   let base = 10;
@@ -1046,81 +1089,357 @@ function buildRents(price) {
   }
   return [
     base,
-    Math.round(base * 4),
-    Math.round(base * 10),
-    Math.round(base * 22),
-    Math.round(base * 36),
-    Math.round(base * 50),
+    Math.round(base * 3),
+    Math.round(base * 6),
+    Math.round(base * 11),
+    Math.round(base * 17),
+    Math.round(base * 24),
   ];
 }
 
-export function generateDefaultBoard(S) {
-  const C = S + 1; const total = 4 * C;
-  // Airports at exact centre of each side
-  const half = Math.round(S / 2);
-  const ap = {S: half, W: C + half, N: 2*C + half, E: 3*C + half};
-  // Railways 2 steps before each airport
-  const rw = {S: ap.S - 2, W: ap.W - 2, N: ap.N - 2, E: ap.E - 2};
-  // Tax Refund tile: between east railway and east airport (ap.E - 1)
-  const taxRet = ap.E - 1;
-  const fixedSpecials = new Set([0,C,2*C,3*C,1,2*C-1,C+1,taxRet,...Object.values(ap),...Object.values(rw)]);
-  const used = new Set([...fixedSpecials]);
-  function placeSpecial(pref) {
-    let pos = Math.min(Math.max(2, pref), total - 2);
-    let guard = 0;
-    while (used.has(pos) && guard < total) {
-      pos = (pos + 1) % total;
-      if (pos <= 1) pos = 2;
-      guard++;
+function ensureNonAdjacentCompanies(board) {
+  if (!Array.isArray(board)) return board;
+  
+  const companies = board
+    .map((sp, idx) => ({ sp, idx }))
+    .filter(item => item.sp?.type === "utility" && item.sp?.group === "company_set");
+  
+  if (companies.length < 2) return board;
+  
+  // Check if any two companies are adjacent
+  const isAdjacent = (idx1, idx2) => {
+    return Math.abs(idx1 - idx2) === 1 || 
+           (idx1 === 0 && idx2 === board.length - 1) || 
+           (idx2 === 0 && idx1 === board.length - 1);
+  };
+  
+  for (let i = 0; i < companies.length; i++) {
+    for (let j = i + 1; j < companies.length; j++) {
+      if (isAdjacent(companies[i].idx, companies[j].idx)) {
+        // Found adjacent companies, swap one with a non-adjacent property
+        const company = companies[j];
+        const properties = board
+          .map((sp, idx) => ({ sp, idx }))
+          .filter(item => item.sp?.type === "property");
+        
+        // Find a property that isn't adjacent to the other company
+        for (const prop of properties) {
+          let canSwap = true;
+          for (let k = 0; k < companies.length; k++) {
+            if (k !== j && isAdjacent(prop.idx, companies[k].idx)) {
+              canSwap = false;
+              break;
+            }
+          }
+          if (canSwap) {
+            // Swap: move this property to company position, company to property position
+            const temp = board[company.idx];
+            board[company.idx] = board[prop.idx];
+            board[prop.idx] = temp;
+            board[company.idx].pos = company.idx;
+            board[prop.idx].pos = prop.idx;
+            companies[j].idx = board.indexOf(temp);
+            break;
+          }
+        }
+      }
     }
-    used.add(pos);
-    return pos;
   }
-  const gov = placeSpecial(2*C - Math.round(S*0.35));
-  const pt  = placeSpecial(C + Math.round(S*0.6));
-  const gt  = placeSpecial(2*C + Math.round(S*0.6));
-  const surp = [
-    placeSpecial(Math.round(S*0.2)),
-    placeSpecial(C+Math.round(S*0.8)),
-    placeSpecial(2*C+Math.round(S*0.7)),
-    placeSpecial(3*C+Math.round(S*0.8)),
-  ];
-  const specials = new Set([...used]);
-  const propSlots = Array.from({length:total},(_,i)=>i).filter(i => !specials.has(i));
+  
+  return board;
+}
+
+export function generateDefaultBoard(S) {
+  const C = S + 1;
+  const total = 4 * C;
+  const sidePos = {
+    north: Array.from({length:S}, (_, i) => 1 + i),
+    east:  Array.from({length:S}, (_, i) => C + 1 + i),
+    south: Array.from({length:S}, (_, i) => 2 * C + 1 + i),
+    west:  Array.from({length:S}, (_, i) => 3 * C + 1 + i),
+  };
+
+  const fixed = new Map();
+  function setFixed(pos, tile) {
+    if (pos == null) return;
+    fixed.set(pos, { pos, ...tile });
+  }
+
+  setFixed(0,   { type:"go", name:"START" });
+  setFixed(C,   { type:"jail", name:"Jail" });
+  setFixed(2*C, { type:"free_parking", name:"🏖️ Vacation" });
+  setFixed(3*C, { type:"go_to_jail", name:"Go To Jail" });
+
+  // Build dynamic templates that place airports in the middle of each side
+  function buildTemplateForSide(side, S) {
+    const template = new Array(S).fill("city");
+    const mid = Math.floor(S / 2);
+    
+    if (side === "north") {
+      template[Math.floor(S / 6)] = "income_tax";
+      template[mid] = "airport";  // Airport in middle
+      template[Math.floor(5 * S / 6)] = "chance";
+      // Add extra special for 44-tile boards to preserve west side
+      if (S === 10) {
+        template[Math.floor(4 * S / 5)] = "tax_return";
+      }
+    } else if (side === "east") {
+      if (S === 10) {
+        // Keep 44-tile west side contiguous for country runs; airport is injected later.
+      } else {
+        template[Math.floor(S / 5)] = "chest";
+        template[Math.floor(2 * S / 5)] = "tax_return";
+        template[Math.floor(4 * S / 5)] = "property_tax";
+      }
+      // Add extra special for 44-tile boards to preserve west side
+      if (S === 10) {
+        template[Math.floor(S / 3)] = "property_tax";
+      }
+    } else if (side === "south") {
+      template[Math.floor(S / 6)] = "chance";
+      template[mid] = "airport";  // Airport in middle
+      template[Math.floor(5 * S / 6)] = "luxury_tax";
+    } else if (side === "west") {
+      // For 44-tile boards (S=10), preserve west side for countries to avoid fragmenting runs
+      // Special tiles are moved to north/east instead
+      if (S < 10) {
+        template[Math.floor(S / 5)] = "chest";
+        template[Math.floor(2 * S / 5)] = "tax_return";
+        template[Math.floor(4 * S / 5)] = "property_tax";
+      }
+      // West side stays all cities for 44-tile boards
+    }
+    return template;
+  }
+  
+  const templateBySide = {
+    north: buildTemplateForSide("north", S),
+    east:  buildTemplateForSide("east", S),
+    south: buildTemplateForSide("south", S),
+    west:  buildTemplateForSide("west", S),
+  };
+
+  function tileFromKind(kind, side) {
+    if (kind === "income_tax") return { type:"income_tax", name:"💰 Income Tax" };
+    if (kind === "chest") return { type:"chest", name:"📦 Community Chest" };
+    if (kind === "gov_prot") return { type:"gov_prot", name:"🏛️ Government Protection" };
+    if (kind === "chance") return { type:"chance", name:"❓ Surprise" };
+    if (kind === "luxury_tax") return { type:"luxury_tax", name:"💎 Luxury Tax", amount:100 };
+    if (kind === "tax_return") return { type:"tax_return", name:"$ Tax Refund" };
+    if (kind === "property_tax") return { type:"property_tax", name:"🏠 Property Tax" };
+    if (kind === "airport") return { type:"airport", name: side === "south" ? "✈ South Airport" : "✈ North Airport", label: side, price:200, owner:null, mortgaged:false };
+    return null;
+  }
+
+  function placeSideTemplate(side, template) {
+    const slots = sidePos[side];
+    const assigned = new Array(S).fill("city");
+    const specials = [];
+    for (let i = 0; i < template.length; i++) {
+      if (template[i] !== "city") specials.push({ kind: template[i], baseIdx: i });
+    }
+    const used = new Set();
+    const span = Math.max(1, template.length - 1);
+    for (const sp of specials) {
+      const target = Math.max(0, Math.min(S - 1, Math.round((sp.baseIdx * (S - 1)) / span)));
+      let idx = target;
+      if (used.has(idx)) {
+        let found = -1;
+        for (let d = 1; d < S; d++) {
+          const a = idx + d;
+          const b = idx - d;
+          if (a < S && !used.has(a)) { found = a; break; }
+          if (b >= 0 && !used.has(b)) { found = b; break; }
+        }
+        if (found >= 0) idx = found;
+      }
+      used.add(idx);
+      assigned[idx] = sp.kind;
+    }
+    for (let i = 0; i < S; i++) {
+      const kind = assigned[i];
+      if (kind === "city") continue;
+      const tile = tileFromKind(kind, side);
+      if (tile) setFixed(slots[i], tile);
+    }
+  }
+
+  placeSideTemplate("north", templateBySide.north);
+  placeSideTemplate("east", templateBySide.east);
+  placeSideTemplate("south", templateBySide.south);
+  placeSideTemplate("west", templateBySide.west);
+
+  const specials = new Set(fixed.keys());
+  const propSlots = Array.from({length:total}, (_, i) => i).filter(i => !specials.has(i));
   const grpSz = Math.ceil(propSlots.length / 8);
   const grpMap = {}; propSlots.forEach((pos,i) => grpMap[pos] = `g${Math.min(Math.floor(i/grpSz), 7)}`);
   const basePrices = [20,50,90,130,180,240,300,360];
   const board = [];
+  const standardByOrder = ["ng", "tr", "mx", "ru", "in", "jp", "us", "gb"];
+  const countryByCode = new Map(COUNTRIES.map(c => [c.code, c]));
+  const cityCursorByCode = {};
+  
+  // Apply consistent country distribution for ALL boards:
+  // - Cheapest country gets 2 tiles
+  // - Most expensive country gets 2 tiles
+  // - Middle countries capped at max 3 tiles each
+  const totalProps = propSlots.length;
+  let propsConfig = [];
+  
+  // Always apply edge-2-city rule: first and last countries get 2 tiles each
+  propsConfig = [2];
+  const remaining = totalProps - 4;  // Remove 2+2 for edge countries
+  const middleCountries = standardByOrder.length - 2;  // Exclude first and last
+  
+  if (middleCountries > 0) {
+    const maxPerCountry = 3;  // Maximum tiles per country in the middle
+    const base = Math.floor(remaining / middleCountries);
+    const capped = Math.min(base, maxPerCountry);
+    const extra = remaining - (capped * middleCountries);
+    
+    for (let i = 0; i < middleCountries; i++) {
+      propsConfig.push(Math.min(capped + (i < extra ? 1 : 0), maxPerCountry));
+    }
+  }
+  propsConfig.push(2);
+  
+  // Trim excess if config exceeds available properties
+  let configTotal = propsConfig.reduce((a, b) => a + b, 0);
+  if (configTotal > totalProps) {
+    for (let i = propsConfig.length - 2; i > 0 && configTotal > totalProps; i--) {
+      if (propsConfig[i] > 1) { propsConfig[i]--; configTotal--; }
+    }
+  }
+  
+  let propertyOrder = 0;
+  let countryIdx = 0;
+  let propsInCurrentCountry = 0;
+  
   for (let pos = 0; pos < total; pos++) {
-    if      (pos === 0)       board.push({pos,type:"go",name:"GO"});
-    else if (pos === C)       board.push({pos,type:"jail",name:"Jail"});
-    else if (pos === 2*C)     board.push({pos,type:"free_parking",name:"Treasure"});
-    else if (pos === 3*C)     board.push({pos,type:"go_to_jail",name:"Go To Jail"});
-    else if (pos === 1)       board.push({pos,type:"income_tax",name:"💰 Income Tax"});
-    else if (pos === 2*C-1)   board.push({pos,type:"luxury_tax",name:"💰 Luxury Tax",amount:100});
-    else if (pos === C+1)     board.push({pos,type:"chest",name:"📦 Community Chest"});
-    else if (pos === gov)     board.push({pos,type:"gov_prot",name:"🏛️ Gov. Protection"});
-    else if (pos === pt)      board.push({pos,type:"property_tax",name:"🏠 Property Tax"});
-    else if (pos === gt)      board.push({pos,type:"gains_tax",name:"📈 Gains Tax"});
-    else if (pos === taxRet)  board.push({pos,type:"tax_return",name:"$ Tax Refund"});
-    else if (pos === ap.S)    board.push({pos,type:"airport",name:"✈ South Airport",label:"south",price:200,owner:null,mortgaged:false});
-    else if (pos === ap.W)    board.push({pos,type:"airport",name:"✈ West Airport",label:"west",price:200,owner:null,mortgaged:false});
-    else if (pos === ap.N)    board.push({pos,type:"airport",name:"✈ North Airport",label:"north",price:200,owner:null,mortgaged:false});
-    else if (pos === ap.E)    board.push({pos,type:"airport",name:"✈ East Airport",label:"east",price:200,owner:null,mortgaged:false});
-    else if (pos === rw.S)    board.push({pos,type:"railway",name:"🚂 South Rail",label:"south",connects:[rw.W,rw.N],goBonus:[],price:150,owner:null,mortgaged:false});
-    else if (pos === rw.W)    board.push({pos,type:"railway",name:"🚂 West Rail",label:"west",connects:[rw.E,rw.N],goBonus:[rw.E,rw.N],price:150,owner:null,mortgaged:false});
-    else if (pos === rw.N)    board.push({pos,type:"railway",name:"🚂 North Rail",label:"north",connects:[rw.E,rw.S],goBonus:[],price:150,owner:null,mortgaged:false});
-    else if (pos === rw.E)    board.push({pos,type:"railway",name:"🚂 East Rail",label:"east",connects:[rw.S,rw.W],goBonus:[],price:150,owner:null,mortgaged:false});
-    else if (surp.includes(pos)) board.push({pos,type:"chance",name:"❓ Surprise"});
-    else if (grpMap[pos] !== undefined) {
+    if (fixed.has(pos)) {
+      board.push(fixed.get(pos));
+    } else if (grpMap[pos] !== undefined) {
       const grp = grpMap[pos]; const gi = parseInt(grp[1]); const base = basePrices[gi];
       const slots = propSlots.filter(p => grpMap[p] === grp); const idx = slots.indexOf(pos);
       const price = base + idx * 10;
-      board.push({pos,type:"property",group:grp,name:`Property ${pos}`,price,rents:buildRents(price),houseCost:Math.max(50,Math.floor(price*0.5)),houses:0,owner:null,mortgaged:false});
+      
+      // Assign country based on configured distribution
+      const countryCode = standardByOrder[countryIdx] || "";
+      const country = countryByCode.get(countryCode);
+      const cityCursor = cityCursorByCode[countryCode] || 0;
+      const city = country ? country.cities[cityCursor % country.cities.length] : `Property ${pos}`;
+      cityCursorByCode[countryCode] = cityCursor + 1;
+      propsInCurrentCountry++;
+      
+      // Move to next country when current country reaches its quota
+      if (propsInCurrentCountry >= propsConfig[countryIdx]) {
+        countryIdx++;
+        propsInCurrentCountry = 0;
+      }
+      
+      board.push({
+        pos,
+        type:"property",
+        group:grp,
+        name: city,
+        countryCode: country?.code || "",
+        countryFlag: country?.flag || "",
+        countryName: country?.name || "",
+        price,
+        rents:buildRents(price),
+        houseCost:Math.max(50,Math.floor(price*0.5)),
+        houses:0,
+        owner:null,
+        mortgaged:false
+      });
+      propertyOrder++;
     }
     else board.push({pos,type:"chance",name:"❓ Surprise"});
   }
   return board;
+}
+
+export function applyLobbyBoardChange(spaces, change) {
+  const board = Array.isArray(spaces) ? spaces.map(sp => ({ ...sp })) : [];
+  if (!board.length || !change) return board;
+  const props = board.filter(sp => sp.type === "property");
+  if (!props.length) return board;
+
+  const countriesByCode = new Map(COUNTRIES.map(c => [c.code, c]));
+
+  if (change.kind === "country") {
+    const fromCode = String(change.from || "").toLowerCase();
+    const toCode = String(change.to || "").toLowerCase();
+    const target = countriesByCode.get(toCode);
+    if (!fromCode || !target) return board;
+    const affected = props.filter(sp => String(sp.countryCode || "").toLowerCase() === fromCode);
+    if (!affected.length) return board;
+    const picks = sample(target.cities, Math.min(3, target.cities.length));
+    const chosen = picks.length ? picks : [...target.cities.slice(0, 3)];
+    affected.forEach((sp, idx) => {
+      const city = chosen[idx % chosen.length] || target.cities[idx % target.cities.length] || sp.name;
+      sp.name = city;
+      sp.countryCode = target.code;
+      sp.countryFlag = target.flag;
+      sp.countryName = target.name;
+      const nextPrice = target.base + ((idx % 3) * 10);
+      sp.price = nextPrice;
+      sp.rents = buildRents(nextPrice);
+      sp.houseCost = Math.max(50, Math.floor(nextPrice * 0.5));
+    });
+    return board;
+  }
+
+  if (change.kind === "city") {
+    const fromCity = String(change.from || "").trim();
+    const toCity = String(change.to || "").trim();
+    if (!fromCity || !toCity) return board;
+    const sp = props.find(p => p.name === fromCity);
+    if (!sp) return board;
+    const sourceCountry = countriesByCode.get(String(sp.countryCode || "").toLowerCase());
+    if (!sourceCountry || !sourceCountry.cities.includes(toCity)) return board;
+    sp.name = toCity;
+    const cityIndex = Math.max(0, sourceCountry.cities.indexOf(toCity));
+    const nextPrice = sourceCountry.base + cityIndex * 10;
+    sp.price = nextPrice;
+    sp.rents = buildRents(nextPrice);
+    sp.houseCost = Math.max(50, Math.floor(nextPrice * 0.5));
+    return board;
+  }
+
+  return board;
+}
+
+export function enforceBoardLayoutConstraints(spaces, S) {
+  const size = Math.max(6, Math.min(parseInt(S || "9"), 10));
+  const scaffold = generateDefaultBoard(size);
+  const input = Array.isArray(spaces) ? spaces : [];
+
+  const inputProps = input
+    .filter(sp => sp && sp.type === "property")
+    .map(sp => ({ ...sp }));
+
+  let propIdx = 0;
+  const out = scaffold.map(sp => {
+    if (sp.type !== "property") return { ...sp };
+    const src = inputProps[propIdx++] || {};
+    return {
+      ...sp,
+      name: src.name || sp.name,
+      countryCode: src.countryCode || sp.countryCode || "",
+      countryFlag: src.countryFlag || sp.countryFlag || "",
+      countryName: src.countryName || sp.countryName || "",
+      stateName: src.stateName || sp.stateName,
+      price: Number.isFinite(Number(src.price)) ? Number(src.price) : sp.price,
+      rents: Array.isArray(src.rents) && src.rents.length === 6 ? src.rents.map(n => Number(n) || 0) : sp.rents,
+      houseCost: Number.isFinite(Number(src.houseCost)) ? Number(src.houseCost) : sp.houseCost,
+      houses: Number.isFinite(Number(src.houses)) ? Math.max(0, Math.min(5, Number(src.houses))) : 0,
+      owner: src.owner || null,
+      mortgaged: !!src.mortgaged,
+    };
+  });
+
+  return out;
 }
 
 export function generateRandomBoard(seedStr, mode, S) {
