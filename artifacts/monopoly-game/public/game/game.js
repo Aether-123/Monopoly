@@ -10,11 +10,15 @@ let wwSelectedCities={};
 let _tokenMoving=false, _prevMoney={};
 let browseInterval=null;
 let currentTheme=localStorage.getItem("mono_theme")||"dark";
+let soundEnabled=localStorage.getItem("mono_sound")!=="false"; // Default enabled
+let lastClickSoundTime=0; // Prevent rapid-fire purchase sounds
 let incomingTrade=null, _tradeTarget=null, tFromSel=[], tToSel=[];
 let avatarReturnScreen="land";
 let _auctionTimer=null, _auctionSecsLeft=10;
 let _diceRolling=false;
 let _isLobbyHost=false;
+let _boardPreviewCache={};
+let _loadingCountriesPromise=null;
 
 /* ─── AVATAR STATE ─────────────────────────────────────── */
 let myAvatar=JSON.parse(localStorage.getItem("mono_avatar")||"null")||
@@ -50,12 +54,51 @@ const GRP_COLORS=["#ef4444","#f97316","#22c55e","#3b82f6","#a855f7","#ec4899","#
 const COUNTRY_CODE_BY_NAME={
   "Nigeria":"ng","Pakistan":"pk","Bangladesh":"bd","Egypt":"eg","Philippines":"ph","Turkey":"tr","Thailand":"th","Indonesia":"id","Argentina":"ar","Poland":"pl","Mexico":"mx","Brazil":"br","China":"cn","Spain":"es","Italy":"it","South Korea":"kr","Russia":"ru","Canada":"ca","Australia":"au","France":"fr","Germany":"de","United Kingdom":"gb","India":"in","Japan":"jp","Netherlands":"nl","United States":"us","Singapore":"sg","Switzerland":"ch"
 };
+const COUNTRY_NAME_BY_CODE=Object.fromEntries(Object.entries(COUNTRY_CODE_BY_NAME).map(([name,code])=>[code,name]));
 function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
 function qs(s){return document.querySelector(s);}
 function qid(id){return document.getElementById(id);}
 function om(id){qid(id)?.classList.remove("ovh");}
 function cm(id){qid(id)?.classList.add("ovh");}
 function ga(action,data={}){socket?.emit("game_action",{action,data});}
+
+/* ─── SOUND EFFECTS ─────────────────────────────────────── */
+let audioCtx=null;
+function getAudioContext(){if(!audioCtx)audioCtx=new(window.AudioContext||window.webkitAudioContext)();return audioCtx;}
+function playTingSound(frequency=900){
+  if(!soundEnabled)return;
+  try{
+    const ctx=getAudioContext();
+    const osc=ctx.createOscillator();
+    const gain=ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.value=frequency;
+    osc.type="sine";
+    gain.gain.setValueAtTime(.3,ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(.01,ctx.currentTime+.15);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime+.15);
+  }catch(e){}
+}
+function playClickSound(){
+  if(!soundEnabled)return;
+  try{
+    const ctx=getAudioContext();
+    const osc=ctx.createOscillator();
+    const gain=ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.setValueAtTime(1200,ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(400,ctx.currentTime+.1);
+    osc.type="square";
+    gain.gain.setValueAtTime(.2,ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(.01,ctx.currentTime+.1);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime+.1);
+  }catch(e){}
+}
+
 function sanitize(s,n=200){return String(s||"").replace(/[<>&"']/g,"").trim().slice(0,n);}
 function calcTieredRents(price){
   const p=Math.max(0,Number(price)||0);
@@ -84,11 +127,25 @@ function getCountryCode(sp){
   if(direct)return direct;
   return COUNTRY_CODE_BY_NAME[sp?.countryName||""]||"";
 }
+function getCountryName(sp){
+  const full=sanitize(sp?.countryName||"",40);
+  if(full && full.length>2)return full;
+  const code=getCountryCode(sp);
+  return COUNTRY_NAME_BY_CODE[code]||"Country";
+}
 function flagImg(countryCode,countryFlag,countryName,cls="flag-inline"){
   const code=String(countryCode||"").toLowerCase();
   if(!code)return countryFlag||"";
-  const nm=sanitize(countryName||"Country",40);
+  const nm=sanitize(countryName||COUNTRY_NAME_BY_CODE[code]||"Country",40);
   return `<img class="${cls}" src="flags/16x12/${code}.png" alt="${nm} flag" onerror="this.onerror=null;this.replaceWith(document.createTextNode('${countryFlag||"🏳️"}'))">`;
+}
+function setDieFace(el, face){
+  if(!el)return;
+  const f=Math.max(1,Math.min(6,parseInt(face||1)));
+  el.setAttribute("data-face",String(f));
+}
+function getLobbyBoardSpaces(){
+  return lobbyData?.mapConfig?.spaces||[];
 }
 
 /* ─── THEMES ───────────────────────────────────────────── */
@@ -107,6 +164,12 @@ function setTheme(t,btn){
   localStorage.setItem("mono_theme",t);
   document.querySelectorAll(".tbtn").forEach(b=>b.classList.remove("active"));
   if(btn) btn.classList.add("active");
+}
+
+function toggleSound(){
+  soundEnabled=!soundEnabled;
+  localStorage.setItem("mono_sound",soundEnabled);
+  return soundEnabled;
 }
 
 /* ─── AVATAR DRAW ──────────────────────────────────────── */
@@ -280,8 +343,8 @@ function _initSocketCore(){
   });
   socket.on("disconnect",()=>{if(qid("conn-info"))qid("conn-info").textContent="❌ Disconnected";});
   socket.on("online_count",({count})=>{if(qid("online-cnt"))qid("online-cnt").textContent=count+" online";});
-  socket.on("room_created",({roomId,player})=>{myId=player.id;myRoomId=roomId;qid("share-url").textContent=`${location.origin}/room/${roomId}`;ss("lobby");});
-  socket.on("room_joined",({roomId,player})=>{myId=player.id;myRoomId=roomId;qid("share-url").textContent=`${location.origin}/room/${roomId}`;ss("lobby");});
+  socket.on("room_created",({roomId,player})=>{myId=player.id;myRoomId=roomId;const codeEl=qid("room-code-display-lobby");if(codeEl)codeEl.textContent=roomId;ss("lobby");});
+  socket.on("room_joined",({roomId,player})=>{myId=player.id;myRoomId=roomId;const codeEl=qid("room-code-display-lobby");if(codeEl)codeEl.textContent=roomId;ss("lobby");});
   socket.on("join_error",({message})=>toast("❌ "+message));
   socket.on("lobby_update",d=>{lobbyData=d;renderLobby();});
   socket.on("game_started",({gameState})=>{gs=gameState;ss("game");renderGame(true);});
@@ -294,6 +357,8 @@ function _initSocketCore(){
   socket.on("chat_msg",m=>appendChat(m));
   socket.on("player_left",({playerId})=>{const p=gs?.players.find(x=>x.id===playerId);if(p){p.disconnected=true;renderGame(false);}});
   socket.on("auction_ended",()=>{stopAuctionTimer();});
+  socket.on("board_change_requested",(d)=>{toast(`📝 ${d.byName} requested ${d.kind} change`);});
+  socket.on("board_changed",()=>{toast("🧩 Board updated in lobby");});
 }
 
 /* ─── SCREENS ──────────────────────────────────────────── */
@@ -319,6 +384,18 @@ async function onStateUpdate(newGs){
       if(!old)continue;
       const delta=p.money-old.money;
       if(Math.abs(delta)>0)animateMoneyDelta(p.id,delta);
+    }
+    // Detect property purchases (owner changed)
+    const now=Date.now();
+    for(let i=0;i<gs.board.length;i++){
+      const sp=gs.board[i];
+      const oldSp=oldGs.board[i];
+      if(oldSp&&!oldSp.owner&&sp.owner&&now-lastClickSoundTime>200){
+        // Property was just purchased (owner changed from none to someone)
+        playClickSound();
+        lastClickSoundTime=now;
+        break; // Only play once per state update to avoid overwhelming audio
+      }
     }
   }
   if(oldGs&&!_tokenMoving){
@@ -347,6 +424,9 @@ function animateMoneyDelta(playerId,delta){
   el.textContent=(delta>0?"+":"")+CUR()+Math.abs(delta).toLocaleString();
   row.style.position="relative";
   row.appendChild(el);
+  // Play sound effect based on money direction
+  if(delta>0)playTingSound(900); // Money in - higher pitch
+  else playTingSound(600); // Money out - lower pitch
   setTimeout(()=>el.remove(),1000);
 }
 
@@ -422,21 +502,33 @@ function txy(pos,S,cPx,tPx){
   const{col,row}=gridPos(pos,S);
   const cx=col===1?cPx/2:col===S+2?cPx+S*tPx+cPx/2:cPx+(col-2)*tPx+tPx/2;
   const cy=row===1?cPx/2:row===S+2?cPx+S*tPx+cPx/2:cPx+(row-2)*tPx+tPx/2;
-  return{x:cx,y:cy};
+  return{x:Math.round(cx),y:Math.round(cy)};
 }
 function getTokenOffsets(playerId){
   const idx=gs?.players.findIndex(p=>p.id===playerId)||0;
-  return{ox:(idx%3)*9-9,oy:Math.floor(idx/3)*9-4};
+  const offsetMultiplier=4;
+  const row=Math.floor(idx/2);
+  const col=idx%2;
+  return{ox:(col*offsetMultiplier*2)-offsetMultiplier,oy:(row*offsetMultiplier*2)-offsetMultiplier};
 }
 
 /* ─── RENDER GAME ───────────────────────────────────────── */
 function renderGame(init){
   if(!gs)return;
+  
+  // Clean slate for new game
+  if(init){
+    const board=qid("game-board");
+    if(board)board.innerHTML="";
+  }
+  
+  // Render board and tokens
   renderBoard();
   renderTokensInstant(init);
   updateDiceOver();
   renderActions();
   renderSidePanels();
+  renderBoardActionLog();
 }
 function renderSidePanels(){renderPlayersPanel();renderPropsPanel();renderStatusPanel();renderTradePanel();renderBankPanel();}
 
@@ -458,14 +550,14 @@ function renderBoard(){
   board.innerHTML="";
 
   const ICONS={
-    airport:"✈️",railway:"🚂",gov_prot:"🏛️",chest:"📦",
+    airport:"✈️",railway:"🚂",utility:"🏢",gov_prot:"🏛️",chest:"📦",
     chance:"❓",income_tax:"💰",property_tax:"🏠",tax_return:"$",
     gains_tax:"📈",luxury_tax:"💸",empty:"·"
   };
   const CORNERS={
     0:{ico:"🚀",lbl:"START",bg:"linear-gradient(135deg,var(--corner),color-mix(in srgb,var(--green) 20%,var(--corner)))"},
     [C]:{ico:"⛓️",lbl:"JAIL",bg:"linear-gradient(135deg,var(--corner),color-mix(in srgb,var(--orange) 18%,var(--corner)))"},
-    [2*C]:{ico:"💰",lbl:"TREASURE",bg:"linear-gradient(135deg,var(--corner),color-mix(in srgb,var(--purple) 18%,var(--corner)))"},
+    [2*C]:{ico:"🏖️",lbl:"VACATION",bg:"linear-gradient(135deg,var(--corner),color-mix(in srgb,var(--blue) 16%,var(--corner)))"},
     [3*C]:{ico:"👮",lbl:"GO JAIL",bg:"linear-gradient(135deg,var(--corner),color-mix(in srgb,var(--red) 20%,var(--corner)))"}
   };
 
@@ -499,9 +591,8 @@ function renderBoard(){
     }else{
       const cFlag=sp?.countryFlag||"";
       const cCode=getCountryCode(sp);
-      const cName=sp?.countryName||"";
-      const propertyIcon=sp?.type==="property"?flagImg(cCode,cFlag,cName,"tile-flag-icon"):"";
-      let ico=propertyIcon||(isHaz?"☠️":isTR?"$":isRT?"🎲":(ICONS[sp?.type]||"🏙️"));
+      const cName=getCountryName(sp);
+      let ico=isHaz?"☠️":isTR?"$":isRT?"🎲":(ICONS[sp?.type]||"🏙️");
 
       // Owner: colored border glow + ownership dot — only when owned
       let ownerDot="";
@@ -521,18 +612,18 @@ function renderBoard(){
       const badge2x=hasFullSet&&setBonusOn&&h===0?'<div class="set-2x-badge">2×</div>':"";
 
       const priceHTML=sp?.price?`<div class="sp-pr">${CUR()}${sp.price}</div>`:"";
-      const cPos=side==="top"?"top":"bottom";
+      const cPos=side;
       const cFlagHtml=flagImg(cCode,cFlag,cName,"sp-country-flag-img");
-      const shouldShowOuterCountryBadge=(side==="top"||side==="bottom");
-      const countryHTML=sp?.type==="property"&&cName&&shouldShowOuterCountryBadge
+      const countryHTML=sp?.type==="property"&&cName
         ?`<div class="sp-country sp-country-${cPos}"><span class="sp-country-flag">${cFlagHtml}</span><span class="sp-country-name">${cName}</span></div>`
         :"";
+      const mapDotHTML="";
       const sideIsVertical=(side==="left"||side==="right");
       const bodyHTML=sideIsVertical
         ?`<div class="sp-body"><div class="sp-nm">${sp?.name||""}</div>${priceHTML}<div class="sp-ico sp-ico-under">${ico}</div></div>`
         :`<div class="sp-body"><div class="sp-ico">${ico}</div><div class="sp-nm">${sp?.name||""}</div>${priceHTML}</div>`;
 
-      div.innerHTML=`${bodyHTML}${countryHTML}${housesHTML}${ownerDot}${badge2x}`;
+      div.innerHTML=`${bodyHTML}${mapDotHTML}${countryHTML}${housesHTML}${ownerDot}${badge2x}`;
     }
     board.appendChild(div);
   }
@@ -540,27 +631,56 @@ function renderBoard(){
 
 /* ─── TOKEN RENDER ──────────────────────────────────────── */
 function renderTokensInstant(init){
+  const tokenContainer=qid("board-wrap");
+  if(!tokenContainer||!gs)return;
+  
+  // Remove all existing tokens
   document.querySelectorAll(".ptok").forEach(t=>t.remove());
-  if(!gs)return;
+  
   const S=gs.tilesPerSide||9;
   const{cPx,tPx}=getBoardDims(S);
-  const wrap=qid("board-wrap");if(!wrap)return;
-  gs.players.forEach((p,i)=>{
+  const TOKEN_SIZE=26;
+  const TOKEN_HALF=TOKEN_SIZE/2;
+  
+  gs.players.forEach((p,playerIdx)=>{
     if(p.bankrupted)return;
-    const{x,y}=txy(p.position,S,cPx,tPx);
-    const{ox,oy}=getTokenOffsets(p.id);
+    
+    // Get tile center position
+    const{x:tileX,y:tileY}=txy(p.position,S,cPx,tPx);
+    
+    // Calculate cluster offset for multiple players on same tile
+    const col=playerIdx%2;
+    const row=Math.floor(playerIdx/2);
+    const offsetX=(col===0?-3:3);
+    const offsetY=(row===0?-3:3);
+    
+    // Final token position (centered on tile with small offset)
+    const posX=tileX+offsetX-TOKEN_HALF;
+    const posY=tileY+offsetY-TOKEN_HALF;
+    
+    // Create token
     const tok=document.createElement("canvas");
-    tok.width=tok.height=36;
-    tok.className=`ptok${i===gs.currentPlayerIdx?" cur-player":""}`;
+    tok.width=tok.height=TOKEN_SIZE;
+    tok.className="ptok"+(playerIdx===gs.currentPlayerIdx?" cur-player":"");
     tok.id="tok-"+p.id;
     tok.title=`${p.name}: ${CUR()}${p.money}`;
-    tok.style.cssText=`left:${x+ox-18}px;top:${y+oy-18}px;position:absolute;border-radius:50%;cursor:default;`;
-    drawAvatar(tok,p.avatar||{},36);
+    tok.style.cssText=`position:absolute;left:${posX}px;top:${posY}px;border-radius:50%;cursor:default;z-index:${playerIdx+10};`;
+    
+    // Draw avatar
+    drawAvatar(tok,p.avatar||{},TOKEN_SIZE);
+    
+    // Draw colored border
     const ctx=tok.getContext("2d");
-    ctx.strokeStyle=p.color;ctx.lineWidth=3;
-    ctx.beginPath();ctx.arc(18,18,16,0,Math.PI*2);ctx.stroke();
+    ctx.strokeStyle=p.color;
+    ctx.lineWidth=2;
+    ctx.beginPath();
+    ctx.arc(TOKEN_HALF,TOKEN_HALF,TOKEN_HALF-1,0,Math.PI*2);
+    ctx.stroke();
+    
+    // Add drop animation
     if(init){tok.style.animation="tokenDrop .4s ease";}
-    wrap.appendChild(tok);
+    
+    tokenContainer.appendChild(tok);
   });
 }
 
@@ -622,6 +742,12 @@ function renderStatusPanel(){
   }).join("");
   const feed=(gs.log||[]).slice(-20).reverse().map(line=>`<div class="status-feed-item">${sanitize(line,180)}</div>`).join("")||"<div class='status-feed-item'>No activity yet</div>";
   el.innerHTML=`${playersHTML}<div class="status-feed-title">Latest Actions</div><div class="status-feed">${feed}</div>`;
+}
+
+function renderBoardActionLog(){
+  const el=qid("board-action-log");if(!el||!gs)return;
+  const feed=(gs.log||[]).slice(-12).reverse().map(line=>`<div class="board-log-item">${sanitize(line,180)}</div>`).join("")||"<div class='board-log-item'>No activity yet</div>";
+  el.innerHTML=`<div class="board-log-title">Live Actions</div><div class="board-log-feed">${feed}</div>`;
 }
 
 /* ─── TRADE PANEL ───────────────────────────────────────── */
@@ -957,7 +1083,10 @@ function updateDiceOver(){
     if(me?.inJail)hint.textContent="🎲 Roll for doubles";
     else hint.textContent="🎲 Click to Roll!";
   }
-  if(gs?.lastRoll){qid("d1").textContent=DF[gs.lastRoll[0]-1];qid("d2").textContent=DF[gs.lastRoll[1]-1];}
+  if(gs?.lastRoll){
+    setDieFace(qid("d1"),gs.lastRoll[0]);
+    setDieFace(qid("d2"),gs.lastRoll[1]);
+  }
 }
 
 function animDice(cb){
@@ -970,16 +1099,17 @@ function animDice(cb){
   d2.classList.add("rolling");
   over?.classList.add("rolling");
   let n=0;const iv=setInterval(()=>{
-    d1.textContent=DF[Math.floor(Math.random()*6)];d2.textContent=DF[Math.floor(Math.random()*6)];
+    setDieFace(d1,1+Math.floor(Math.random()*6));
+    setDieFace(d2,1+Math.floor(Math.random()*6));
     if(++n>11){
       clearInterval(iv);
       d1.classList.remove("rolling");
       d2.classList.remove("rolling");
       over?.classList.remove("rolling");
       _diceRolling=false;
-      if(cb)cb();
+      setTimeout(()=>{if(cb)cb();},120);
     }
-  },55);
+  },75);
 }
 
 function _renderActionsCore(){
@@ -1011,7 +1141,7 @@ function _renderActionsCore(){
     const canAuction=gs.settings?.auctionMode&&gs.settings.auctionMode!=="none";
     h+=`<button class="btn btn-acc" onclick="ga('buy')">🏠 Buy ${CUR()}${sp?.price}</button>`;
     if(canAuction)h+=`<button class="btn btn-blu" onclick="ga('start_auction')">🔨 Auction</button>`;
-    h+=`<button class="btn btn-out" onclick="ga('pass')">❌ Pass</button>`;
+    h+=`<button class="btn btn-out" onclick="ga('end_turn')">⏭️ Skip Purchase</button>`;
   }
   if(gs.phase==="auction"){
     const auc=gs.auction;
@@ -1026,7 +1156,7 @@ function _renderActionsCore(){
       h+=`<button class="btn btn-red btn-sm" onclick="auctionFold()">🏳️ Fold</button>`;
     }else if(auc?.folded?.includes(myId)){h+=`<div style="color:var(--muted);font-size:.76rem">You folded</div>`;}
   }
-  if(gs.phase==="air_travel")h+=`<button class="btn btn-blu" onclick="showTravModal()">✈ Fly (${CUR()}${gs.settings.travelFee})</button><button class="btn btn-out" onclick="ga('skip_travel')">Stay</button>`;
+  if(gs.phase==="air_travel")h+=`<button class="btn btn-blu" onclick="showTravModal()">✈ Fly</button><button class="btn btn-out" onclick="ga('skip_travel')">Stay</button>`;
   if(gs.phase==="rail_travel")h+=`<button class="btn btn-out" style="border-color:#8d6e63;color:#bcaaa4" onclick="showRailModal()">🚂 Ride (${CUR()}${gs.settings.railwayFee||75})</button><button class="btn btn-out" onclick="ga('skip_travel')">Stay</button>`;
   if(gs.phase==="go_prompt"&&gs.pendingEvent){
     const emi=gs.pendingEvent.emi||0;
@@ -1100,7 +1230,7 @@ function renderAuctionModal(){
       ${ps.stateName?`<span>📍 ${ps.stateName}</span>`:""}
     </div>
     ${(ps.type==="property"&&ps.rents)?`<table class="rtbl" style="margin-top:.25rem"><tr><th>Level</th><th>Rent</th></tr>${["Base","1🏠","2🏠","3🏠","4🏠","🏨"].map((lbl,i)=>`<tr><td>${lbl}</td><td>${CUR()}${ps.rents[i]||0}</td></tr>`).join("")}</table>`:""}
-    ${(ps.type==="airport")?`<table class="rtbl" style="margin-top:.25rem"><tr><th>Owned Airports</th><th>Fee</th></tr>${[1,2,3,4].map(n=>`<tr><td>${n}</td><td>${CUR()}${(gs.settings.airportFee||100)*n}</td></tr>`).join("")}</table>`:""}
+    ${(ps.type==="airport")?`<table class="rtbl" style="margin-top:.25rem"><tr><th>Owned Airports</th><th>Rent</th></tr><tr><td>1</td><td>${CUR()}100</td></tr><tr><td>2</td><td>${CUR()}200</td></tr></table>`:""}
     ${(ps.type==="railway")?`<table class="rtbl" style="margin-top:.25rem"><tr><th>Owned Railways</th><th>Fee</th></tr>${[1,2,3,4].map(n=>`<tr><td>${n}</td><td>${CUR()}${25*Math.pow(2,n-1)}</td></tr>`).join("")}</table>`:""}
     <div class="auc-history">
       ${auc.bidHistory?.length?auc.bidHistory.slice(-6).reverse().map((b,i)=>`<div class="auc-hist-row${i===0?" auc-hist-latest":""}"><b>${b.playerName}</b> bid <b style="color:var(--accent)">${CUR()}${b.amount}</b></div>`).join(""):`<div style="font-size:.72rem;color:var(--muted);text-align:center">No bids yet — start bidding!</div>`}
@@ -1245,7 +1375,7 @@ function showPropModal(pos){
     const lbls=["Base","1🏠","2🏠","3🏠","4🏠","🏨"];
     rH=`<table class="rtbl"><tr><th>Level</th><th>Rent</th></tr>${sp.rents.map((r,i)=>`<tr class="${(sp.houses||0)===i?"rhl":""}"><td>${lbls[i]}</td><td>${CUR()}${hasSet&&setBonusOn&&i===0?`<b style="color:var(--accent)">${r*2}</b> <span style='color:var(--muted);font-size:.7em'>×2 SET</span>`:r}</td></tr>`).join("")}</table>`;
   }
-  if(sp.type==="airport")rH=`<table class="rtbl"><tr><th>Airports</th><th>Fee</th></tr>${[1,2,3,4].map(n=>`<tr><td>${n}</td><td>${CUR()}${gs.settings.airportFee*n}</td></tr>`).join("")}</table>`;
+  if(sp.type==="airport")rH=`<table class="rtbl"><tr><th>Owned Airports</th><th>Rent</th></tr><tr><td>1</td><td>${CUR()}100</td></tr><tr><td>2</td><td>${CUR()}200</td></tr></table>`;
   if(sp.type==="railway")rH=`<table class="rtbl"><tr><th>Railways</th><th>Fee</th></tr>${[1,2,3,4].map(n=>`<tr><td>${n}</td><td>${CUR()}${25*Math.pow(2,n-1)}</td></tr>`).join("")}</table>`;
   const me=gs.players.find(p=>p.id===myId);
   const isMyTurn=gs.players[gs.currentPlayerIdx]?.id===myId;
@@ -1289,15 +1419,19 @@ function showPropModal(pos){
 /* ─── TRAVEL MODALS ──────────────────────────────────────── */
 function showTravModal(){
   const me=gs.players.find(p=>p.id===myId);
+  const cur=gs.board[me?.position];
   const airports=gs.board.filter(s=>s.type==="airport"&&s.pos!==me?.position);
+  const fromSouth=cur?.label==="south";
   qid("trav-c").innerHTML=`<h2>✈ Choose Destination</h2>
-    <p style="color:var(--muted);font-size:.78rem;margin-bottom:.5rem">Fee: <b>${CUR()}${gs.settings.travelFee}</b></p>
+    <p style="color:var(--muted);font-size:.78rem;margin-bottom:.5rem">Pay destination airport rent if owned (100 / 200 for full airport set).</p>
     <div class="trav-list">${airports.map(a=>{
-      const ok=(me?.money||0)>=gs.settings.travelFee;
+      const ok=(me?.money||0)>=0;
       const own=a.owner?gs.players.find(p=>p.id===a.owner):null;
+      const rent=own&&own.id!==myId?(gs.board.filter(s=>s.type==="airport"&&s.owner===own.id).length>=2?200:100):0;
+      const goBonus=(fromSouth&&a.label==="north")?` · +${CUR()}${gs.settings.goSalary} GO salary`:"";
       return `<div class="trav-item${ok?"":" disabled"}" onclick="${ok?`ga('travel_air',{destPos:${a.pos}});cm('m-trav')`:""}">
         <div><div style="font-weight:700">✈ ${a.name}</div><div style="font-size:.7rem;color:${own?own.color:"var(--muted)"}">${own?"Owner: "+own.name:"Unowned"}</div></div>
-        <div style="color:var(--accent);font-size:.76rem">${ok?CUR()+gs.settings.travelFee:"No funds"}</div>
+        <div style="color:var(--accent);font-size:.72rem">${rent?`Rent ${CUR()}${rent}`:"No rent"}${goBonus}</div>
       </div>`;
     }).join("")}</div>
     <button class="btn btn-out" style="width:100%;margin-top:.3rem" onclick="ga('skip_travel');cm('m-trav')">Stay Here</button>`;
@@ -1412,18 +1546,23 @@ function launchConfetti(){
 /* ─── LOBBY ──────────────────────────────────────────────── */
 function renderLobby(){
   if(!lobbyData)return;
-  const{players,settings}=lobbyData;
+  const{players,settings,mapConfig}=lobbyData;
   const isHost=players.find(p=>p.id===myId)?.isHost;
   _isLobbyHost=!!isHost;
   if(isHost&&qid("start-btn"))qid("start-btn").style.display=players.length>=1?"block":"none";
   if(!isHost&&qid("start-btn"))qid("start-btn").style.display="none";
   const rulesBtn=qid("rules-btn");
   if(rulesBtn){
-    rulesBtn.disabled=!isHost;
-    rulesBtn.style.opacity=isHost?"1":".45";
-    rulesBtn.style.cursor=isHost?"pointer":"not-allowed";
-    rulesBtn.title=isHost?"Edit game rules":"Only host can change rules";
+    rulesBtn.disabled=false;
+    rulesBtn.style.opacity="1";
+    rulesBtn.style.cursor="pointer";
+    rulesBtn.title=isHost?"Edit game rules":"View game rules";
   }
+  
+  // Update room code display
+  const codeDisplay=qid("room-code-display-lobby");
+  if(codeDisplay)codeDisplay.textContent=myRoomId||lobbyData.roomId||"—";
+  
   qid("lobby-players").innerHTML=players.map(p=>{
     const avImg=drawAvatarSVG(p.avatar||{},38);
     return`<div style="display:flex;align-items:center;gap:.5rem;padding:.38rem;border-radius:7px;border:1px solid ${p.isHost?"var(--accent)":"var(--border)"}">
@@ -1433,15 +1572,132 @@ function renderLobby(){
     </div>`;
   }).join("");
   qid("lobby-settings").innerHTML=`<div style="font-size:.78rem;line-height:1.9">
+    <div style="margin-bottom:.6rem;padding-bottom:.6rem;border-bottom:1px solid var(--border)">
+      <div style="font-weight:700;margin-bottom:.3rem">🔐 ${settings.privateRoom?"🔒 Private Room":"🌐 Public Room"}</div>
+      <div style="font-size:.7rem;color:var(--text)">Room Code: <span style="font-family:monospace;font-weight:700;color:var(--accent);background:var(--bg);padding:0.1rem 0.4rem;border-radius:4px">${myRoomId||lobbyData.roomId||"—"}</span></div>
+    </div>
     <div>💰 Start: ${settings.currency}${settings.startingCash}</div>
     <div>🚀 GO: ${settings.currency}${settings.goSalary}</div>
+    <div>⭐ START Bonus: ${settings.startTileBonusPercent||0}%</div>
     <div>🏦 Loan: ${settings.loanRate}%/round</div>
     <div>🔨 Auction: ${settings.auctionMode||"none"}</div>
   </div>`;
+
+  renderMiniBoard("lobby-board-preview", mapConfig?.spaces||[], mapConfig?.tilesPerSide||9);
+  const boardProps=(mapConfig?.spaces||[]).filter(s=>s.type==="property");
+  const countries=[...new Set(boardProps.map(s=>s.countryName).filter(Boolean))];
+  if(qid("lobby-board-info"))qid("lobby-board-info").textContent=`${(mapConfig?.spaces||[]).length||0} tiles · ${countries.length} countries`;
+
+  const requestBtn=qid("lobby-request-btn");
+  const applyBtn=qid("lobby-apply-btn");
+  if(requestBtn)requestBtn.style.display=isHost?"none":"inline-flex";
+  if(applyBtn)applyBtn.style.display=isHost?"inline-flex":"none";
+  lobbyRefreshChangeOptions();
+
+  const reqs=lobbyData.boardChangeRequests||[];
+  const reqWrap=qid("lobby-change-requests");
+  if(reqWrap){
+    if(!reqs.length){
+      reqWrap.innerHTML="<div style='font-size:.72rem;color:var(--muted)'>No pending change requests.</div>";
+    }else{
+      reqWrap.innerHTML=reqs.slice(0,8).map(r=>`<div style="display:flex;align-items:center;gap:.35rem;border:1px solid var(--border);border-radius:8px;padding:.28rem .42rem;margin-bottom:.25rem;font-size:.72rem">
+        <span style="color:var(--muted)">${r.byName}</span>
+        <span><b>${r.kind}</b>: ${r.from} → ${r.to}</span>
+        ${isHost?`<button class='btn btn-sm btn-acc' style='margin-left:auto' onclick='applyRequestedBoardChange("${r.id}","${r.kind}","${String(r.from||"").replace(/"/g,"&quot;")}","${String(r.to||"").replace(/"/g,"&quot;")}")'>Apply</button>`:""}
+      </div>`).join("");
+    }
+  }
+}
+
+function renderMiniBoard(containerId, spaces, size){
+  const el=qid(containerId);if(!el)return;
+  const board=Array.isArray(spaces)?spaces:[];
+  const S=Math.max(6,Math.min(parseInt(size||9),10));
+  if(!board.length){el.innerHTML="<span>No board data yet</span>";return;}
+  const dim=S+2;
+  const tileHtml=(sp)=>{
+    if(sp.type==="property"){
+      const cc=(sp.countryCode||"").toLowerCase();
+      const city=sanitize(sp.name||"City",32);
+      const country=getCountryName(sp);
+      const flag=cc
+        ?`<img class="mini-flag-img" src="flags/16x12/${cc}.png" alt="${country}" onerror="this.onerror=null;this.replaceWith(document.createTextNode('${sanitize(sp.countryFlag||"🏳️",4)}'))">`
+        :`<span class="mini-flag-fallback">${sanitize(sp.countryFlag||"🏳️",4)}</span>`;
+      return `<div class="mini-prop-wrap">${flag}<div class="mini-city" title="${city}">${city}</div><div class="mini-country" title="${country}">${country}</div></div>`;
+    }
+    const specialIcon={
+      go:"🚀",jail:"⛓️",free_parking:"💰",go_to_jail:"👮",
+      airport:"✈️",railway:"🚂",chance:"❓",chest:"📦",
+      income_tax:"💸",luxury_tax:"💎",tax_return:"💵",property_tax:"🏠",gains_tax:"📈",gov_prot:"🏛️"
+    }[sp.type]||"•";
+    const label=sanitize(sp.name||sp.type||"tile",20);
+    return `<div class="mini-special-wrap"><span class="mini-special-ico">${specialIcon}</span><span class="mini-special-name" title="${label}">${label}</span></div>`;
+  };
+  const mini=board.map(sp=>{
+    const gp=gridPos(sp.pos,S);
+    return `<div class='mini-tile mini-${sp.type||"tile"}' style='grid-column:${gp.col};grid-row:${gp.row}' title='${sanitize(sp.name||"",60)}'>${tileHtml(sp)}</div>`;
+  }).join("");
+  el.innerHTML=`<div class='mini-board' style='--mini-grid:${dim}'>${mini}</div>`;
+}
+
+function lobbyRefreshChangeOptions(){
+  if(!_wwCountries.length && !_loadingCountriesPromise){
+    loadCountries().then(()=>lobbyRefreshChangeOptions());
+  }
+  const spaces=getLobbyBoardSpaces();
+  const kind=qid("lobby-change-kind")?.value||"country";
+  const fromSel=qid("lobby-change-from");
+  const toSel=qid("lobby-change-to");
+  if(!fromSel||!toSel)return;
+  const props=spaces.filter(s=>s.type==="property");
+  if(!props.length){fromSel.innerHTML="";toSel.innerHTML="";return;}
+
+  if(kind==="country"){
+    const current=[...new Map(props.filter(p=>p.countryCode&&p.countryName).map(p=>[p.countryCode,{code:p.countryCode,name:p.countryName,flag:p.countryFlag||""}])).values()];
+    const all=[...new Map(_wwCountries.map(c=>[c.code,c])).values()];
+    fromSel.innerHTML=current.map(c=>`<option value='${c.code}'>${c.flag||"🌍"} ${c.name}</option>`).join("");
+    toSel.innerHTML=all.map(c=>`<option value='${c.code}'>${c.flag||"🌍"} ${c.name}</option>`).join("");
+    return;
+  }
+
+  const cities=props.map(p=>({name:p.name,countryCode:p.countryCode,countryName:p.countryName}));
+  fromSel.innerHTML=cities.map(c=>`<option value='${c.name}'>${c.name}</option>`).join("");
+  const chosen=fromSel.value||cities[0].name;
+  const source=props.find(p=>p.name===chosen);
+  let options=[];
+  if(source?.countryCode){
+    const country=(
+      _wwCountries.find(c=>c.code===source.countryCode)||
+      _wwCountries.find(c=>c.name===source.countryName)
+    );
+    options=(country?.cities||[]).filter(c=>c!==chosen);
+  }
+  toSel.innerHTML=options.map(c=>`<option value='${c}'>${c}</option>`).join("");
+}
+
+function requestLobbyBoardChange(){
+  const kind=qid("lobby-change-kind")?.value;
+  const from=qid("lobby-change-from")?.value;
+  const to=qid("lobby-change-to")?.value;
+  if(!kind||!from||!to){toast("Choose change type/from/to first");return;}
+  socket.emit("request_board_change",{kind,from,to});
+}
+
+function applyLobbyBoardChange(){
+  if(!_isLobbyHost){toast("Only host can apply changes.");return;}
+  const kind=qid("lobby-change-kind")?.value;
+  const from=qid("lobby-change-from")?.value;
+  const to=qid("lobby-change-to")?.value;
+  if(!kind||!from||!to){toast("Choose change type/from/to first");return;}
+  socket.emit("apply_board_change",{kind,from,to});
+}
+
+function applyRequestedBoardChange(requestId,kind,from,to){
+  if(!_isLobbyHost)return;
+  socket.emit("apply_board_change",{requestId,kind,from,to});
 }
 
 function openSetup(){
-  if(!_isLobbyHost){toast("Only host can change rules.");return;}
   if(!lobbyData)return;
   const s=lobbyData.settings;
   function num(k,label,mi,mx,step=50){return`<div style="display:flex;align-items:center;justify-content:space-between;padding:.22rem 0;font-size:.8rem;gap:.4rem"><span>${label}</span><input type="number" value="${s[k]}" min="${mi}" max="${mx}" step="${step}" onchange="us('${k}',+this.value)" class="inp" style="width:75px;font-size:.75rem;padding:.25rem .4rem"></div>`;}
@@ -1451,9 +1707,13 @@ function openSetup(){
   function cur_sel(){return`<div style="display:flex;align-items:center;justify-content:space-between;padding:.22rem 0;font-size:.8rem;gap:.4rem"><span>Currency</span><select onchange="us('currency',this.value)" class="inp" style="font-size:.75rem;padding:.2rem .35rem;width:auto">${CURRENCIES.map(([sym,lbl])=>`<option value="${sym}" ${s.currency===sym?"selected":""}>${sym} ${lbl}</option>`).join("")}</select></div>`;}
   qid("setup-c").innerHTML=`
     <div class="stabs"><button class="stab on" onclick="stab('gen',this)">General</button><button class="stab" onclick="stab('tax',this)">Tax</button><button class="stab" onclick="stab('bank',this)">Bank</button></div>
-    <div id="st-gen" class="ssec on">${cur_sel()}${num("startingCash","Start Cash",500,5000)}${num("goSalary","GO Salary",50,1000,50)}${num("maxPlayers","Max Players",2,8,1)}${tgl("treasurePot","Treasure")}${jailRentTgl()}${tgl("doubleRentOnSet","2× Rent on Full Set")}${tgl("evenBuild","Even Build")}${tgl("mortgageEnabled","Mortgage System")}${tgl("auctionMode","Auction on Pass")}</div>
+    <div id="st-gen" class="ssec on">${cur_sel()}${num("startingCash","Start Cash",500,5000)}${num("goSalary","GO Salary",50,1000,50)}${num("startTileBonusPercent","START Bonus %",0,300,10)}${num("maxPlayers","Max Players",2,8,1)}${tgl("treasurePot","Treasure")}${jailRentTgl()}${tgl("doubleRentOnSet","2× Rent on Full Set")}${tgl("evenBuild","Even Build")}${tgl("mortgageEnabled","Mortgage System")}${tgl("auctionMode","Auction on Unbought Property")}</div>
     <div id="st-tax" class="ssec">${num("incomeTaxRate","Income Tax %",0,50,1)}${num("propertyTaxRate","Property Tax %",0,20,1)}${num("gainsTaxRate","Gains Tax %",0,50,1)}${num("randomTaxMultiplier","Random Tax ×",1,50,1)}${num("taxReturnRate","Tax Return %",0,100,5)}</div>
     <div id="st-bank" class="ssec">${num("depositRate","Deposit Rate %",0,20,1)}${num("loanRate","Loan Rate %",0,30,1)}${num("creditCardFee","CC Fee",0,200,10)}${num("creditCardLimit","CC Limit",100,2000,100)}${num("insurancePremium","Insurance Premium",0,200,10)}${num("insurancePayout","Insurance Payout %",0,100,5)}</div>`;
+  if(!_isLobbyHost){
+    qid("setup-c")?.querySelectorAll("input,select,button.stab").forEach(el=>{el.disabled=true;});
+    toast("👀 Rules view only");
+  }
   om("m-setup");
 }
 function stab(id,btn){document.querySelectorAll(".stab").forEach(b=>b.classList.remove("on"));document.querySelectorAll(".ssec").forEach(s=>s.classList.remove("on"));btn.classList.add("on");qid("st-"+id).classList.add("on");}
@@ -1463,7 +1723,11 @@ function us(k,v){if(!_isLobbyHost){toast("Only host can change rules.");return;}
 let _wwCountries=[];
 async function loadCountries(){
   if(_wwCountries.length)return;
-  try{const r=await fetch("/mapi/countries");_wwCountries=await r.json();}catch(e){console.warn("Countries load failed",e);}
+  if(_loadingCountriesPromise){await _loadingCountriesPromise;return;}
+  _loadingCountriesPromise=(async()=>{
+    try{const r=await fetch("/mapi/countries");_wwCountries=await r.json();}catch(e){console.warn("Countries load failed",e);}finally{_loadingCountriesPromise=null;}
+  })();
+  await _loadingCountriesPromise;
 }
 
 function goBoardSelect(){
@@ -1476,20 +1740,51 @@ function setBoardType(t,btn){
   curBoardType=t;
   document.querySelectorAll(".bttab").forEach(b=>b.classList.remove("on"));
   btn.classList.add("on");
-  qid("random-panel").style.display=t==="random"?"block":"none";
-  qid("worldwide-panel").style.display=t==="worldwide"?"block":"none";
+  const randomPanel=qid("random-panel");
+  const worldwidePanel=qid("worldwide-panel");
+  if(randomPanel)randomPanel.style.display=t==="random"?"block":"none";
+  if(worldwidePanel)worldwidePanel.style.display=t==="worldwide"?"block":"none";
   if(t==="worldwide")renderWorldwidePanel();
   updateBoardPreview();
 }
-function setSize(s,btn){curSize=s;document.querySelectorAll(".szb").forEach(b=>b.classList.remove("on"));btn.classList.add("on");updateBoardPreview();}
-function setRMode(m,btn){curRMode=m;document.querySelectorAll(".rmode-btn").forEach(b=>b.classList.remove("on"));btn.classList.add("on");}
+function setSize(s,btn){curSize=Math.max(6,Math.min(parseInt(s||9),10));document.querySelectorAll(".szb").forEach(b=>b.classList.remove("on"));btn.classList.add("on");updateBoardPreview();}
+function setRMode(m,btn){curRMode=m;document.querySelectorAll(".rmode-btn").forEach(b=>b.classList.remove("on"));btn.classList.add("on");updateBoardPreview();}
 function generateSeed(){
-  curSeed=Math.random().toString(36).slice(2,8).toUpperCase();
+  const prev=(qid("seed-inp")?.value||curSeed||"").toUpperCase();
+  let next=prev;
+  for(let i=0;i<5&&next===prev;i++)next=Math.random().toString(36).slice(2,8).toUpperCase();
+  curSeed=next||Math.random().toString(36).slice(2,8).toUpperCase();
   if(qid("seed-inp"))qid("seed-inp").value=curSeed;
   if(qid("seed-display"))qid("seed-display").textContent=`Seed: ${curSeed}`;
 }
-function rerollSeed(){generateSeed();}
-function updateBoardPreview(){
+function rerollSeed(){generateSeed();updateBoardPreview();}
+function randomizeBoard(){
+  if(curBoardType!=="random"){
+    toast("⚠️ Select Random board first");
+    return;
+  }
+  rerollSeed();
+  toast("🔀 Board randomized");
+}
+async function getSelectionPreviewBoard(){
+  const cacheKey=`${curBoardType}|${curSize}|${curRMode}|${qid("seed-inp")?.value||curSeed}`;
+  if(_boardPreviewCache[cacheKey])return _boardPreviewCache[cacheKey];
+  let data={board:[],tilesPerSide:curSize};
+  if(curBoardType==="random"){
+    const s=(qid("seed-inp")?.value||curSeed||"").toUpperCase();
+    const r=await fetch(`/mapi/random-board?seed=${encodeURIComponent(s)}&mode=${encodeURIComponent(curRMode)}&S=${curSize}`);
+    data=await r.json();
+  }else if(["india","uk","usa"].includes(curBoardType)){
+    const r=await fetch(`/mapi/domestic-board?preset=${curBoardType}&S=${curSize}`);
+    data=await r.json();
+  }else{
+    const r=await fetch(`/mapi/default-board?S=${curSize}`);
+    data=await r.json();
+  }
+  _boardPreviewCache[cacheKey]=data;
+  return data;
+}
+async function updateBoardPreview(){
   const t=4*(curSize+1);
   const labels={
     standard:"🌍 Standard World",
@@ -1501,11 +1796,23 @@ function updateBoardPreview(){
   };
   if(qid("board-preview"))qid("board-preview").innerHTML=`<span>${labels[curBoardType]||""}<br>${t} tiles</span>`;
   if(qid("board-info"))qid("board-info").textContent=`${t} tiles · 4 airports · 4 railways`;
+  try{
+    const d=await getSelectionPreviewBoard();
+    renderMiniBoard("board-size-preview",d.board,d.tilesPerSide||curSize);
+  }catch{
+    if(qid("board-size-preview"))qid("board-size-preview").innerHTML="<span>Preview unavailable</span>";
+  }
 }
 
 async function renderWorldwidePanel(){
-  await loadCountries();
   const el=qid("ww-country-list");if(!el)return;
+  el.innerHTML=`<div style="padding:.55rem .6rem;color:var(--muted);font-size:.75rem">Loading countries…</div>`;
+  await loadCountries();
+  if(!_wwCountries.length){
+    el.innerHTML=`<div style="padding:.55rem .6rem;color:var(--red);font-size:.75rem">Could not load countries. Please retry.</div>`;
+    if(qid("ww-count"))qid("ww-count").textContent="0 cities";
+    return;
+  }
   el.innerHTML=_wwCountries.map(c=>`
     <div class="country-row">
       <div class="country-hdr" onclick="toggleWWCountry('${c.code}')">
@@ -1517,8 +1824,8 @@ async function renderWorldwidePanel(){
       <div class="country-cities" id="wcities-${c.code}" style="display:none">
         ${c.cities.map(city=>`<span class="city-chip ${(wwSelectedCities[c.code]||[]).includes(city)?"sel":""}" onclick="toggleWWCity('${c.code}','${city}',this)">${city}</span>`).join("")}
         <div style="margin-top:.28rem;display:flex;gap:.2rem">
-          <button class="btn btn-sm btn-out" style="font-size:.62rem" onclick="wwSelectCountry('${c.code}')">All</button>
-          <button class="btn btn-sm btn-out" style="font-size:.62rem" onclick="wwClearCountry('${c.code}')">None</button>
+          <button type="button" class="btn btn-sm btn-out" style="font-size:.62rem" onclick="event.stopPropagation();wwSelectCountry('${c.code}')">All</button>
+          <button type="button" class="btn btn-sm btn-out" style="font-size:.62rem" onclick="event.stopPropagation();wwClearCountry('${c.code}')">None</button>
         </div>
       </div>
     </div>`).join("");
@@ -1589,7 +1896,7 @@ async function createRoom(){
 
 async function _doCreateRoom(customSpaces=null){
   const nm=(qid("bs-name")?.value||qid("cr-name")?.value||"Player").trim();
-  const isPublic=qid("bs-public")?.checked??true;
+  const isPublic=(qid("bs-privacy")?.value||"public")==="public";
   let mapConfig=null;
 
   if(customSpaces){
@@ -1616,7 +1923,13 @@ async function _doCreateRoom(customSpaces=null){
       mapConfig={spaces:d.board,tilesPerSide:curSize,name:curBoardType.toUpperCase(),settings:{}};
     }catch{toast("❌ Error generating board");return;}
   }else{
-    mapConfig={name:"Standard World",tilesPerSide:curSize,preset:"standard",settings:{}};
+    try{
+      const r=await fetch(`/mapi/default-board?S=${curSize}`);
+      const d=await r.json();
+      mapConfig={spaces:d.board,name:"Standard World",tilesPerSide:curSize,preset:"standard",settings:{}};
+    }catch{
+      mapConfig={name:"Standard World",tilesPerSide:curSize,preset:"standard",settings:{}};
+    }
   }
   socket.emit("create_room",{playerName:nm,mapConfig,isPublic,avatar:myAvatar});
 }
@@ -1632,7 +1945,21 @@ function quickMatch(){
   socket.emit("quick_match",{playerName:(qid("qm-name")?.value||"Player").trim(),avatar:myAvatar});
   toast("⚡ Finding a game…");
 }
-function copyLink(){navigator.clipboard.writeText(qid("share-url")?.textContent||"").then(()=>toast("🔗 Copied!"));}
+function copyLink(){
+  const roomCode=(myRoomId||lobbyData?.roomId||"").trim();
+  if(!roomCode){toast("⚠️ No room code yet");return;}
+  const link=`${location.origin}/room/${roomCode}`;
+  navigator.clipboard.writeText(link)
+    .then(()=>toast("🔗 Link copied!"))
+    .catch(()=>toast("❌ Could not copy"));
+}
+function copyRoomCode(){
+  const roomCode=(myRoomId||lobbyData?.roomId||"").trim();
+  if(!roomCode){toast("⚠️ No room code yet");return;}
+  navigator.clipboard.writeText(roomCode)
+    .then(()=>toast("📌 Room code copied!"))
+    .catch(()=>toast("❌ Could not copy"));
+}
 function startGame(){socket.emit("start_game");}
 
 async function browseRooms(){await refreshBrowse();om("m-browse");browseInterval=setInterval(refreshBrowse,5000);}
@@ -1680,6 +2007,17 @@ function toast(msg){
 }
 
 /* ─── MAP EDITOR ─────────────────────────────────────────── */
+async function openEditorFromCreate(){
+  const playerName=qid("cr-name")?.value.trim();
+  if(!playerName){
+    toast("⚠️ Please enter your name first");
+    return;
+  }
+  await openEditor();
+  // Auto-fill editor name with Create Room name
+  if(qid("ed-name"))qid("ed-name").value=playerName;
+}
+
 async function openEditor(){
   ss("editor");
   if(!editorCountries.length){
@@ -1703,6 +2041,8 @@ async function openEditor(){
   }
   editorRenderCountryPool();
   editorRenderBoard();
+  // Initialize size display and enhancements hint
+  setTimeout(()=>editorSetSize(editorSize),50);
 }
 
 function editorFilterCountries(q){
@@ -1781,6 +2121,14 @@ function editorToggleCity(code,cityIndex){
     editorBoard.splice(existing,1);
     toast(`🗑️ Removed ${city}`);
   }else{
+    // Check country tile limit (max 3 tiles per country)
+    const countryCount = editorBoard.filter(s => s.countryCode === code).length;
+    const maxTiles = 3;  // Cap at 3 tiles per country
+    if (countryCount >= maxTiles) {
+      toast(`⚠️ ${c.name} already has ${maxTiles} tile(s). Maximum 3 tiles per country.`);
+      return;
+    }
+    
     const slots=editorGetFreeSlots(1);
     if(!slots.length){toast("⚠️ No free slots on board");return;}
     const slot=slots[0];
@@ -1796,10 +2144,19 @@ function editorToggleCity(code,cityIndex){
 
 function editorAddAllCities(code){
   const c=editorCountries.find(x=>x.code===code);if(!c)return;
-  const n=editorSettings.citiesPerCountry||3;
+  const maxTiles = 3;  // Cap per country
   const alreadyAdded=editorBoard.filter(s=>s.countryCode===code).map(s=>s.name);
-  const toAdd=c.cities.filter(city=>!alreadyAdded.includes(city)).slice(0,n);
-  if(!toAdd.length){toast(`All ${c.name} cities already on board`);return;}
+  const currentCount = alreadyAdded.length;
+  
+  if (currentCount >= maxTiles) {
+    toast(`⚠️ ${c.name} already has ${maxTiles} tile(s). Cannot add more.`);
+    return;
+  }
+  
+  const maxToAdd = maxTiles - currentCount;  // How many more can be added
+  const toAdd=c.cities.filter(city=>!alreadyAdded.includes(city)).slice(0, maxToAdd);
+  
+  if(!toAdd.length){toast(`All available ${c.name} cities already on board`);return;}
   const slots=editorGetFreeSlots(toAdd.length);
   toAdd.forEach((city,i)=>{
     if(!slots[i])return;
@@ -1811,7 +2168,7 @@ function editorAddAllCities(code){
       price,rents:calcTieredRents(price),
       houseCost:Math.max(50,Math.floor(price*.5)),houses:0,owner:null,mortgaged:false});
   });
-  toast(`➕ Added ${toAdd.length} cities from ${c.name}`);
+  toast(`➕ Added ${toAdd.length} cities from ${c.name} (max ${maxTiles} tiles per country)`);
   editorRenderCountryPool();
   editorRenderBoard();
 }
@@ -1947,6 +2304,165 @@ function editorPoolDropOnBoard(countryCode,cityIndex,targetPos){
   editorRenderBoard();
 }
 
+/* ─── EDITOR ENHANCEMENTS: 40/44 Tile Rules ────────────── */
+function editorApplyEdgeCountrySetRule(board, S){
+  if(!Array.isArray(board)||!board.length||S<6)return board;
+  if(4*(S+1)>=44)return board; // Only for boards smaller than 44
+  
+  const C=S+1,total=4*C;
+  const props=board.filter(sp=>sp?.type==="property");
+  if(props.length<10)return board;
+  
+  function sideOfPos(pos){
+    if(pos>C&&pos<2*C)return"east";
+    if(pos>2*C&&pos<3*C)return"south";
+    if(pos>3*C&&pos<4*C)return"west";
+    if(pos>0&&pos<C)return"north";
+    return"corner";
+  }
+  
+  const statsByCode=new Map();
+  props.forEach(sp=>{
+    const code=String(sp.countryCode||"").toLowerCase();
+    if(!code)return;
+    const entry=statsByCode.get(code)||{code,name:sp.countryName||"",flag:sp.countryFlag||"",count:0,sum:0};
+    entry.count+=1;entry.sum+=Number(sp.price||0);
+    if(!entry.name&&sp.countryName)entry.name=sp.countryName;
+    if(!entry.flag&&sp.countryFlag)entry.flag=sp.countryFlag;
+    statsByCode.set(code,entry);
+  });
+  
+  if(statsByCode.size<3)return board;
+  
+  const ranked=[...statsByCode.values()].map(x=>({...x,avg:x.count?x.sum/x.count:0})).sort((a,b)=>a.avg-b.avg);
+  const lowCode=ranked[0].code,highCode=ranked[ranked.length-1].code;
+  if(!lowCode||!highCode||lowCode===highCode)return board;
+  
+  const middleCodes=ranked.slice(1,-1).map(x=>x.code);
+  if(!middleCodes.length)return board;
+  
+  const countryPropCount=props.length-2,remaining=countryPropCount-4;
+  if(remaining<0)return board;
+  
+  const targetCounts=new Map([[lowCode,2],[highCode,2]]);
+  const base=Math.floor(remaining/middleCodes.length);
+  const extra=remaining%middleCodes.length;
+  middleCodes.forEach((code,idx)=>{
+    let count=base+(idx<extra?1:0);
+    count=Math.min(count,3);
+    targetCounts.set(code,count);
+  });
+  
+  const targetTotal=[...targetCounts.values()].reduce((a,b)=>a+b,0);
+  if(targetTotal<countryPropCount&&middleCodes.length>0){
+    const diff=countryPropCount-targetTotal;
+    for(let i=0;i<diff&&i<middleCodes.length;i++){
+      const code=middleCodes[i];
+      if((targetCounts.get(code)||0)<3)targetCounts.set(code,(targetCounts.get(code)||0)+1);
+    }
+  }
+  
+  const countrySequence=[];
+  [lowCode,...middleCodes,highCode].forEach(code=>{
+    const cnt=targetCounts.get(code)||0;
+    for(let i=0;i<cnt;i++)countrySequence.push(code);
+  });
+  if(countrySequence.length!==countryPropCount)return board;
+  
+  const propsSorted=props.slice().sort((a,b)=>Number(a.price||0)-Number(b.price||0));
+  const eastC=props.filter(sp=>sideOfPos(Number(sp.pos))==="east").sort((a,b)=>Number(b.price||0)-Number(a.price||0))[0]||null;
+  const southC=props.filter(sp=>sideOfPos(Number(sp.pos))==="south").sort((a,b)=>Number(b.price||0)-Number(a.price||0))[0]||null;
+  
+  const utilityProps=[];
+  if(eastC)utilityProps.push(eastC);
+  if(southC&&southC!==eastC)utilityProps.push(southC);
+  if(utilityProps.length<2){
+    propsSorted.slice().reverse().forEach(sp=>{if(utilityProps.length>=2)return;if(!utilityProps.includes(sp))utilityProps.push(sp);});
+  }
+  
+  const utilitySet=new Set(utilityProps);
+  const countryProps=propsSorted.filter(sp=>!utilitySet.has(sp));
+  
+  countryProps.forEach((sp,idx)=>{sp.countryCode=countrySequence[idx];});
+  
+  const elec=utilityProps.find(sp=>sideOfPos(Number(sp.pos))==="east")||utilityProps[0];
+  const water=utilityProps.find(sp=>sideOfPos(Number(sp.pos))==="south")||utilityProps.find(sp=>sp!==elec)||utilityProps[1]||utilityProps[0];
+  
+  [{sp:elec,name:"Electric Company"},{sp:water,name:"Water Company"}].forEach(({sp,name})=>{
+    if(!sp)return;
+    sp.type="utility";sp.group="company_set";sp.name=name;sp.countryCode="";sp.countryName="";sp.countryFlag="";
+    sp.price=150;sp.rents=[0,0,0,0,0,0];sp.houseCost=0;sp.houses=0;sp.owner=null;sp.mortgaged=false;
+  });
+  
+  return board;
+}
+
+function editorApplyFortyFourInfrastructureRule(board, S){
+  if(!Array.isArray(board)||board.length!==4*(S+1)||S!==10)return board;
+  
+  const C=S+1,total=4*C;
+  const props=board.filter(sp=>sp?.type==="property");
+  if(props.length<6)return board;
+  
+  function sideOfPos(pos){
+    if(pos>C&&pos<2*C)return"east";
+    if(pos>2*C&&pos<3*C)return"south";
+    if(pos>3*C&&pos<4*C)return"west";
+    if(pos>0&&pos<C)return"north";
+    return"corner";
+  }
+  
+  const isAdjacent=(p1,p2)=>{const a=Number(p1),b=Number(p2);return Math.abs(a-b)===1||((a===0&&b===total-1)||(a===total-1&&b===0));};
+  
+  const used=new Set();
+  const pickInRange=(side,minPos,maxPos)=>{
+    const tile=props.filter(sp=>{const pos=Number(sp.pos);return sideOfPos(pos)===side&&pos>=minPos&&pos<=maxPos&&!used.has(sp.pos);})
+      .sort((a,b)=>Number(b.price||0)-Number(a.price||0))[0]||null;
+    if(tile)used.add(tile.pos);return tile;
+  };
+  const pickOnSide=(side)=>{
+    const tile=props.filter(sp=>sideOfPos(Number(sp.pos))===side&&!used.has(sp.pos))
+      .sort((a,b)=>Number(b.price||0)-Number(a.price||0))[0]||null;
+    if(tile)used.add(tile.pos);return tile;
+  };
+  const pickAny=()=>{
+    const tile=props.filter(sp=>!used.has(sp.pos)).sort((a,b)=>Number(b.price||0)-Number(a.price||0))[0]||null;
+    if(tile)used.add(tile.pos);return tile;
+  };
+  
+  // Infrastructure placement
+  const ap1=pickInRange("south",2*C+Math.floor(C/4),2*C+Math.floor(3*C/4))||pickOnSide("south")||pickAny();
+  const ap2=pickInRange("south",2*C+Math.floor(C/4),2*C+Math.floor(3*C/4))||pickOnSide("south")||pickAny();
+  const compN=pickOnSide("north")||pickAny();
+  let compS=pickOnSide("south")||pickAny();
+  
+  if(compN&&compS&&isAdjacent(compN.pos,compS.pos)){
+    used.delete(compS.pos);compS=null;compS=pickAny();
+    if(compS&&isAdjacent(compN.pos,compS.pos)){
+      used.delete(compS.pos);
+      compS=props.find(sp=>!used.has(sp.pos)&&!isAdjacent(Number(compN.pos),Number(sp.pos)));
+      if(compS)used.add(compS.pos);
+    }
+  }
+  
+  const railN=pickOnSide("north")||pickAny();
+  const railS=pickOnSide("south")||pickAny();
+  
+  const toType=(sp,type,group,name,price)=>{
+    if(!sp)return;sp.type=type;sp.group=group;sp.name=name;sp.countryCode="";sp.countryName="";sp.countryFlag="";
+    sp.price=price;sp.rents=[0,0,0,0,0,0];sp.houseCost=0;sp.houses=0;sp.owner=null;sp.mortgaged=false;
+  };
+  
+  toType(ap1,"airport","airport_set","South Airport 1",200);
+  toType(ap2,"airport","airport_set","South Airport 2",200);
+  toType(compN,"utility","company_set","Northern Company",150);
+  toType(compS,"utility","company_set","Southern Company",150);
+  toType(railN,"railway","rail_ns","North Railway",200);
+  toType(railS,"railway","rail_ns","South Railway",200);
+  
+  return board;
+}
+
 function buildEditorFullBoard(S){
   const C=S+1,total=4*C;
   const specials={};
@@ -1982,13 +2498,16 @@ function buildEditorFullBoard(S){
       if(p>0&&p<total&&!specials[p])specials[p]={pos:p,type:"chance",name:"❓ Surprise"};
     });
   }
-  const board=[];
+  let board=[];
   for(let pos=0;pos<total;pos++){
     if(specials[pos]){board.push(specials[pos]);continue;}
     const edSp=editorBoard.find(s=>s.pos===pos);
     if(edSp)board.push(edSp);
     else board.push({pos,type:"empty",name:""});
   }
+  // Apply enhancements based on board size
+  board=editorApplyEdgeCountrySetRule(board,S);
+  board=editorApplyFortyFourInfrastructureRule(board,S);
   return board;
 }
 
@@ -2056,8 +2575,22 @@ function editorRemoveTile(pos){
 
 /* ─── EDITOR SETTINGS ────────────────────────────────────── */
 function editorSetSize(v){
-  editorSize=v;editorRenderBoard();
+  v=Math.max(9,Math.min(parseInt(v||9),10)); // Only sizes 9 (40 tiles) and 10 (44 tiles)
+  editorSize=v;
   if(qid("ed-size"))qid("ed-size").value=v;
+  const total=4*(v+1);
+  if(qid("ed-size-val"))qid("ed-size-val").textContent=`${total} Tiles`;
+  // Update enhancement hint based on board size
+  const hintEl=qid("ed-enhancement-hint");
+  const sizeHintEl=qid("ed-size-hint");
+  if(total===40){
+    if(sizeHintEl)sizeHintEl.textContent="Edge country distribution + edge utilities";
+    if(hintEl)hintEl.textContent="✨ 40-Tile: Cheapest country on one edge, most expensive on opposite";
+  }else if(total===44){
+    if(sizeHintEl)sizeHintEl.textContent="Edge distribution + 6 infrastructure tiles";
+    if(hintEl)hintEl.textContent="✨ 44-Tile: Plus 2 airports + 2 companies + 2 railways for expanded gameplay";
+  }
+  editorRenderBoard();
 }
 function editorSetAuction(mode,btn){
   editorSettings.auctionMode=mode;

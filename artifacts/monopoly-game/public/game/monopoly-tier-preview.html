@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Monopoly Property Tier Preview</title>
+  <style>
+    :root {
+      --bg: #0f0f1a;
+      --tile-bg: #16213e;
+      --text: #ffffff;
+      --muted: #a8b1c7;
+      --tier-1: #a8dadc;
+      --tier-2: #f4a261;
+      --tier-3: #2a9d8f;
+      --tier-4: #4895ef;
+      --tier-5: #9b5de5;
+      --tier-6: #ffd700;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      padding: 24px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: sans-serif;
+    }
+
+    .page-title {
+      margin: 0 0 16px;
+      font-size: 20px;
+      font-weight: 700;
+    }
+
+    .tier-group {
+      margin-bottom: 18px;
+    }
+
+    .tier-label {
+      margin: 0 0 8px;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: .02em;
+      color: var(--text);
+    }
+
+    .tier-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .tile {
+      width: 70px;
+      height: 90px;
+      border-radius: 4px;
+    }
+
+    .tile-property {
+      position: relative;
+      background: var(--tile-bg);
+      color: var(--text);
+      border: 1px solid rgba(255,255,255,.08);
+      border-left: 4px solid var(--tier-color, #ffffff);
+      border-top: 4px solid var(--tier-color, #ffffff);
+      padding: 6px 6px 5px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
+      transition: all 0.2s ease;
+    }
+
+    .tile-property:hover {
+      filter: brightness(1.25);
+      box-shadow: 0 0 10px rgba(255,255,255,0.12);
+    }
+
+    .tile-name {
+      width: 100%;
+      text-align: center;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.1;
+      color: #ffffff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .flag {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      line-height: 1;
+      background: rgba(255,255,255,.06);
+    }
+
+    .tile-price {
+      font-size: 10px;
+      color: var(--muted);
+      text-align: center;
+      line-height: 1;
+      white-space: nowrap;
+    }
+
+    .tier-1 { --tier-color: var(--tier-1); }
+    .tier-2 { --tier-color: var(--tier-2); }
+    .tier-3 { --tier-color: var(--tier-3); }
+    .tier-4 { --tier-color: var(--tier-4); }
+    .tier-5 { --tier-color: var(--tier-5); }
+    .tier-6 { --tier-color: var(--tier-6); }
+
+    .tile-property.owned {
+      background: color-mix(in srgb, var(--tile-bg) 90%, var(--tier-color) 10%);
+    }
+
+    .tile-property.owned::after {
+      content: "";
+      position: absolute;
+      left: 2px;
+      right: 2px;
+      bottom: 2px;
+      height: 2px;
+      border-radius: 2px;
+      background: var(--owner-color, #ffffff);
+    }
+  </style>
+</head>
+<body>
+  <h1 class="page-title">Monopoly Property Tiles — 6 Tier Preview (28 Countries)</h1>
+
+  <section class="tier-group">
+    <h2 class="tier-label">Tier 1 — #a8dadc (Soft Cyan)</h2>
+    <div class="tier-row">
+      <div class="tile tile-property tier-1 owned" style="--owner-color:#ff6b6b"><div class="tile-name">Nigeria</div><div class="flag">🇳🇬</div><div class="tile-price">$20–$160</div></div>
+      <div class="tile tile-property tier-1"><div class="tile-name">Pakistan</div><div class="flag">🇵🇰</div><div class="tile-price">$25–$165</div></div>
+      <div class="tile tile-property tier-1"><div class="tile-name">Bangladesh</div><div class="flag">🇧🇩</div><div class="tile-price">$30–$170</div></div>
+      <div class="tile tile-property tier-1"><div class="tile-name">Egypt</div><div class="flag">🇪🇬</div><div class="tile-price">$40–$180</div></div>
+      <div class="tile tile-property tier-1"><div class="tile-name">Philippines</div><div class="flag">🇵🇭</div><div class="tile-price">$50–$190</div></div>
+    </div>
+  </section>
+
+  <section class="tier-group">
+    <h2 class="tier-label">Tier 2 — #f4a261 (Warm Orange)</h2>
+    <div class="tier-row">
+      <div class="tile tile-property tier-2"><div class="tile-name">Turkey</div><div class="flag">🇹🇷</div><div class="tile-price">$60–$200</div></div>
+      <div class="tile tile-property tier-2 owned" style="--owner-color:#4cc9f0"><div class="tile-name">Thailand</div><div class="flag">🇹🇭</div><div class="tile-price">$70–$210</div></div>
+      <div class="tile tile-property tier-2"><div class="tile-name">Indonesia</div><div class="flag">🇮🇩</div><div class="tile-price">$70–$210</div></div>
+      <div class="tile tile-property tier-2"><div class="tile-name">Argentina</div><div class="flag">🇦🇷</div><div class="tile-price">$80–$220</div></div>
+      <div class="tile tile-property tier-2"><div class="tile-name">Poland</div><div class="flag">🇵🇱</div><div class="tile-price">$100–$240</div></div>
+    </div>
+  </section>
+
+  <section class="tier-group">
+    <h2 class="tier-label">Tier 3 — #2a9d8f (Teal Green)</h2>
+    <div class="tier-row">
+      <div class="tile tile-property tier-3"><div class="tile-name">Mexico</div><div class="flag">🇲🇽</div><div class="tile-price">$120–$260</div></div>
+      <div class="tile tile-property tier-3"><div class="tile-name">Brazil</div><div class="flag">🇧🇷</div><div class="tile-price">$140–$280</div></div>
+      <div class="tile tile-property tier-3 owned" style="--owner-color:#f72585"><div class="tile-name">China</div><div class="flag">🇨🇳</div><div class="tile-price">$160–$300</div></div>
+      <div class="tile tile-property tier-3"><div class="tile-name">Spain</div><div class="flag">🇪🇸</div><div class="tile-price">$170–$310</div></div>
+      <div class="tile tile-property tier-3"><div class="tile-name">Italy</div><div class="flag">🇮🇹</div><div class="tile-price">$180–$320</div></div>
+    </div>
+  </section>
+
+  <section class="tier-group">
+    <h2 class="tier-label">Tier 4 — #4895ef (Sky Blue)</h2>
+    <div class="tier-row">
+      <div class="tile tile-property tier-4"><div class="tile-name">South Korea</div><div class="flag">🇰🇷</div><div class="tile-price">$200–$340</div></div>
+      <div class="tile tile-property tier-4"><div class="tile-name">Russia</div><div class="flag">🇷🇺</div><div class="tile-price">$200–$340</div></div>
+      <div class="tile tile-property tier-4"><div class="tile-name">Canada</div><div class="flag">🇨🇦</div><div class="tile-price">$220–$360</div></div>
+      <div class="tile tile-property tier-4 owned" style="--owner-color:#ffbe0b"><div class="tile-name">Australia</div><div class="flag">🇦🇺</div><div class="tile-price">$240–$380</div></div>
+      <div class="tile tile-property tier-4"><div class="tile-name">France</div><div class="flag">🇫🇷</div><div class="tile-price">$240–$380</div></div>
+    </div>
+  </section>
+
+  <section class="tier-group">
+    <h2 class="tier-label">Tier 5 — #9b5de5 (Purple)</h2>
+    <div class="tier-row">
+      <div class="tile tile-property tier-5"><div class="tile-name">Germany</div><div class="flag">🇩🇪</div><div class="tile-price">$280–$420</div></div>
+      <div class="tile tile-property tier-5"><div class="tile-name">United Kingdom</div><div class="flag">🇬🇧</div><div class="tile-price">$290–$430</div></div>
+      <div class="tile tile-property tier-5 owned" style="--owner-color:#06d6a0"><div class="tile-name">India</div><div class="flag">🇮🇳</div><div class="tile-price">$290–$430</div></div>
+      <div class="tile tile-property tier-5"><div class="tile-name">Japan</div><div class="flag">🇯🇵</div><div class="tile-price">$310–$450</div></div>
+      <div class="tile tile-property tier-5"><div class="tile-name">Netherlands</div><div class="flag">🇳🇱</div><div class="tile-price">$320–$460</div></div>
+    </div>
+  </section>
+
+  <section class="tier-group">
+    <h2 class="tier-label">Tier 6 — #ffd700 (Gold)</h2>
+    <div class="tier-row">
+      <div class="tile tile-property tier-6"><div class="tile-name">United States</div><div class="flag">🇺🇸</div><div class="tile-price">$360–$500</div></div>
+      <div class="tile tile-property tier-6 owned" style="--owner-color:#8338ec"><div class="tile-name">Singapore</div><div class="flag">🇸🇬</div><div class="tile-price">$370–$510</div></div>
+      <div class="tile tile-property tier-6"><div class="tile-name">Switzerland</div><div class="flag">🇨🇭</div><div class="tile-price">$380–$520</div></div>
+    </div>
+  </section>
+</body>
+</html>
