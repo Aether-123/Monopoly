@@ -575,9 +575,31 @@ function payRailwayFee(gs, idx, sp) {
 }
 
 function hasFullSet(gs, sp) {
-  if (!sp.group || !sp.owner) return false;
-  const grp = gs.board.filter(s => s.group === sp.group && s.type === "property");
-  return grp.length > 0 && grp.every(s => s.owner === sp.owner);
+  if (!sp || sp.type !== "property" || !sp.owner) return false;
+
+  const countryCode = String(sp.countryCode || "").toLowerCase();
+  if (countryCode) {
+    const countrySet = gs.board.filter(
+      (s) => s?.type === "property" && String(s.countryCode || "").toLowerCase() === countryCode,
+    );
+    return countrySet.length > 1 && countrySet.every((s) => s.owner === sp.owner);
+  }
+
+  if (!sp.group) return false;
+  const grp = gs.board.filter((s) => s.type === "property" && s.group === sp.group);
+  return grp.length > 1 && grp.every((s) => s.owner === sp.owner);
+}
+
+function getPropertySet(gs, sp) {
+  if (!gs || !sp || sp.type !== "property") return [];
+  const countryCode = String(sp.countryCode || "").toLowerCase();
+  if (countryCode) {
+    return gs.board.filter(
+      (s) => s?.type === "property" && String(s.countryCode || "").toLowerCase() === countryCode,
+    );
+  }
+  if (!sp.group) return [];
+  return gs.board.filter((s) => s?.type === "property" && s.group === sp.group);
 }
 
 function calcRent(gs, sp) {
@@ -772,15 +794,14 @@ function doBuild(gs, idx, data) {
   if (pos == null || pos >= gs.board.length) return;
   const sp = gs.board[pos];
   if (!sp || sp.owner !== p.id || sp.type !== "property") return;
+  const setTiles = getPropertySet(gs, sp);
   if (gs.settings.housingRule === "monopoly") {
-    const grp = gs.board.filter(s => s.group === sp.group);
-    if (!grp.every(s => s.owner === p.id)) return;
+    if (!(setTiles.length > 1 && setTiles.every((s) => s.owner === p.id))) return;
   }
   const hc = sp.houseCost || 100;
   if (p.money < hc || (sp.houses||0) >= 5) return;
   if (gs.settings.evenBuild) {
-    const grp = gs.board.filter(s => s.group === sp.group);
-    if ((sp.houses||0) > Math.min(...grp.map(s => s.houses||0))) return;
+    if (setTiles.length && (sp.houses||0) > Math.min(...setTiles.map(s => s.houses||0))) return;
   }
   p.money -= hc; sp.houses = (sp.houses||0) + 1;
   gs.log.push(`🏗️ ${p.name} built on ${sp.name}`);
@@ -791,6 +812,10 @@ function doSellHouse(gs, idx, data) {
   if (pos == null || pos >= gs.board.length) return;
   const sp = gs.board[pos];
   if (!sp || sp.owner !== p.id || !(sp.houses||0)) return;
+  const setTiles = getPropertySet(gs, sp);
+  if (gs.settings.evenBuild) {
+    if (setTiles.length && (sp.houses||0) < Math.max(...setTiles.map(s => s.houses||0))) return;
+  }
   earnMoney(gs, idx, Math.floor((sp.houseCost||100) / 2), "sold house");
   sp.houses--;
 }

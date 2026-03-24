@@ -491,10 +491,31 @@ def pay_railway_fee(gs, idx, sp):
     charge_money(gs, idx, fee, f"railway fee to {own['name']}"); own["money"] += fee
 
 def has_full_set(gs, sp):
-    """True if the owner of sp controls all properties in sp's colour group."""
-    if not sp.get("group") or not sp.get("owner"): return False
+    """True if owner controls all properties in the same country (fallback: group)."""
+    if sp.get("type") != "property" or not sp.get("owner"): return False
+
+    code = str(sp.get("countryCode") or "").lower()
+    if code:
+      country_set = [
+          s for s in gs["board"]
+          if s.get("type") == "property" and str(s.get("countryCode") or "").lower() == code
+      ]
+      return len(country_set) > 1 and all(s.get("owner") == sp.get("owner") for s in country_set)
+
+    if not sp.get("group"): return False
     grp = [s for s in gs["board"] if s.get("group")==sp.get("group") and s.get("type")=="property"]
-    return len(grp)>0 and all(s.get("owner")==sp.get("owner") for s in grp)
+    return len(grp)>1 and all(s.get("owner")==sp.get("owner") for s in grp)
+
+def get_property_set(gs, sp):
+    if not sp or sp.get("type") != "property": return []
+    code = str(sp.get("countryCode") or "").lower()
+    if code:
+        return [
+            s for s in gs["board"]
+            if s.get("type") == "property" and str(s.get("countryCode") or "").lower() == code
+        ]
+    if not sp.get("group"): return []
+    return [s for s in gs["board"] if s.get("type") == "property" and s.get("group") == sp.get("group")]
 
 def calc_rent(gs, sp):
     if sp.get("type") == "utility":
@@ -503,8 +524,8 @@ def calc_rent(gs, sp):
         return roll*(10 if cnt==2 else 4)
     h = sp.get("houses",0); rents = sp.get("rents",[0]*6)
     r = rents[min(h, len(rents)-1)]
-    # 2x rent when player owns full colour set and no houses built yet (monopoly bonus)
-    if h==0 and has_full_set(gs, sp): r = r*2
+    # 2x base rent on full set when enabled and no houses yet
+    if h==0 and has_full_set(gs, sp) and gs.get("settings", {}).get("doubleRentOnSet", True): r = r*2
     return r
 
 # ═══════════════════════════════════════════════════════
@@ -640,14 +661,13 @@ def do_build(gs, idx, data):
     if pos is None or pos>=len(gs["board"]): return
     sp=gs["board"][pos]
     if not sp or sp.get("owner")!=p["id"] or sp.get("type")!="property": return
+    prop_set=get_property_set(gs, sp)
     if gs["settings"]["housingRule"]=="monopoly":
-        grp=[s for s in gs["board"] if s.get("group")==sp.get("group")]
-        if not all(s.get("owner")==p["id"] for s in grp): return
+        if not (len(prop_set)>1 and all(s.get("owner")==p["id"] for s in prop_set)): return
     hc=sp.get("houseCost",100)
     if p["money"]<hc or sp.get("houses",0)>=5: return
     if gs["settings"].get("evenBuild"):
-        grp=[s for s in gs["board"] if s.get("group")==sp.get("group")]
-        if sp.get("houses",0)>min(s.get("houses",0) for s in grp): return
+        if prop_set and sp.get("houses",0)>min(s.get("houses",0) for s in prop_set): return
     p["money"]-=hc; sp["houses"]=sp.get("houses",0)+1
     gs["log"].append(f"🏗️ {p['name']} built on {sp['name']}")
 
@@ -656,6 +676,9 @@ def do_sell_house(gs, idx, data):
     if pos is None or pos>=len(gs["board"]): return
     sp=gs["board"][pos]
     if not sp or sp.get("owner")!=p["id"] or not sp.get("houses"): return
+    prop_set=get_property_set(gs, sp)
+    if gs["settings"].get("evenBuild"):
+        if prop_set and sp.get("houses",0)<max(s.get("houses",0) for s in prop_set): return
     earn_money(gs, idx, math.floor(sp.get("houseCost",100)/2), "sold house")
     sp["houses"]-=1
 

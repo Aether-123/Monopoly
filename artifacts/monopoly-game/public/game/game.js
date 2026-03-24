@@ -133,6 +133,17 @@ function getCountryName(sp){
   const code=getCountryCode(sp);
   return COUNTRY_NAME_BY_CODE[code]||"Country";
 }
+function hasPropertyFullSet(gs,sp){
+  if(!gs||!sp||sp.type!=="property"||!sp.owner)return false;
+  const cCode=getCountryCode(sp);
+  if(cCode){
+    const set=gs.board.filter(s=>s?.type==="property"&&getCountryCode(s)===cCode);
+    return set.length>1&&set.every(s=>s.owner===sp.owner);
+  }
+  if(!sp.group)return false;
+  const grp=gs.board.filter(s=>s?.type==="property"&&s.group===sp.group);
+  return grp.length>1&&grp.every(s=>s.owner===sp.owner);
+}
 function flagImg(countryCode,countryFlag,countryName,cls="flag-inline"){
   const code=String(countryCode||"").toLowerCase();
   if(!code)return countryFlag||"";
@@ -567,7 +578,7 @@ function renderBoard(){
     const side=sideOf(pos,S);
     const isCorner=CORNERS[pos]!=null;
     const isHaz=pos===gs.hazardPos,isTR=pos===gs.taxReturnPos,isRT=pos===gs.randomTaxPos;
-    const hasFullSet=sp?.group&&sp?.owner&&gs.board.filter(s=>s.group===sp.group&&s.type==="property").every(s=>s.owner===sp.owner);
+    const hasFullSet=hasPropertyFullSet(gs,sp);
     const setBonusOn=gs?.settings?.doubleRentOnSet!==false;
 
     const div=document.createElement("div");
@@ -1368,7 +1379,7 @@ function showPropModal(pos){
   const own=sp.owner?gs.players.find(p=>p.id===sp.owner):null;
   const gi=sp.group?parseInt(sp.group.slice(1)):-1;
   const gc=gi>=0?GRP_COLORS[gi]:"#666";
-  const hasSet=sp.group&&gs.board.filter(s=>s.group===sp.group&&s.type==="property").every(s=>s.owner===sp.owner);
+  const hasSet=hasPropertyFullSet(gs,sp);
   const setBonusOn=gs.settings?.doubleRentOnSet!==false;
   let rH="";
   if(sp.type==="property"&&sp.rents){
@@ -1384,8 +1395,38 @@ function showPropModal(pos){
   const canCreditBuy=isBuyPhase&&!own&&cc?.active&&(cc.limit-cc.used)>=(sp.price||0);
   const modalFlag=flagImg(sp.countryCode,sp.countryFlag,sp.countryName,"flag-inline-md");
   const canManageMortgage=own&&me&&own.id===myId&&isMyTurn;
+  const canManageHouses=canManageMortgage&&sp.type==="property"&&!sp.mortgaged;
   const mortgagedAmount=Math.floor((sp.price||0)*0.75);
   const unmortgageCost=mortgagedAmount+Math.ceil(mortgagedAmount*0.05);
+  const propertySet=(canManageHouses
+    ?(()=>{
+      const cCode=getCountryCode(sp);
+      if(cCode)return gs.board.filter(s=>s?.type==="property"&&getCountryCode(s)===cCode);
+      if(sp.group)return gs.board.filter(s=>s?.type==="property"&&s.group===sp.group);
+      return [];
+    })()
+    :[]);
+  const minSetH=propertySet.length?Math.min(...propertySet.map(s=>s.houses||0)):0;
+  const maxSetH=propertySet.length?Math.max(...propertySet.map(s=>s.houses||0)):0;
+  const needsMonopoly=gs.settings?.housingRule==="monopoly";
+  const canBuildSet=!needsMonopoly||hasSet;
+  const houseCost=Math.max(0,sp.houseCost||0);
+  const sellRefund=Math.floor(houseCost/2);
+  const canBuildHouse=canManageHouses&&canBuildSet&&houseCost>0&&(sp.houses||0)<5&&(me.money>=houseCost)&&(!gs.settings?.evenBuild||(sp.houses||0)<=minSetH);
+  const canSellHouse=canManageHouses&&(sp.houses||0)>0&&(!gs.settings?.evenBuild||(sp.houses||0)>=maxSetH);
+  const houseControlsHTML=canManageHouses?`
+    <div style="margin-top:.55rem;padding:.5rem;border:1px solid var(--border);border-radius:8px;background:var(--bg)">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:.45rem">
+        <div style="font-size:.74rem;color:var(--muted)">Houses: <b style="color:var(--txt)">${sp.houses||0}</b>/5</div>
+        <div style="display:flex;gap:.35rem;align-items:center">
+          <button class="btn btn-sm btn-red" ${canSellHouse?"":"disabled"} onclick="ga('sell_house',{position:${pos}})">− ${CUR()}${sellRefund}</button>
+          <button class="btn btn-sm btn-grn" ${canBuildHouse?"":"disabled"} onclick="ga('build',{position:${pos}})">+ ${CUR()}${houseCost}</button>
+        </div>
+      </div>
+      ${needsMonopoly&&!hasSet?`<div style="font-size:.7rem;color:var(--red);margin-top:.3rem">Own the full country set to build.</div>`:""}
+      ${gs.settings?.evenBuild?`<div style="font-size:.7rem;color:var(--muted);margin-top:.3rem">Even-build rule is active.</div>`:""}
+      <div style="font-size:.7rem;color:var(--muted);margin-top:.25rem">Demolish refund: 50% of house cost.</div>
+    </div>`:"";
   const mortgageHTML=canManageMortgage
     ?(sp.mortgaged
       ?`<div style="margin-top:.55rem;padding:.5rem;border:1px solid var(--border);border-radius:8px;background:var(--bg)">
@@ -1408,6 +1449,7 @@ function showPropModal(pos){
     ${sp.mortgaged?`<p style="color:var(--red);font-size:.75rem">⚠️ Mortgaged</p>`:""}
     ${sp.price?`<p style="font-size:.82rem;margin-bottom:.35rem">Price: <b>${CUR()}${sp.price}</b>${sp.houseCost?` · House: <b>${CUR()}${sp.houseCost}</b>`:""}</p>`:""}
     ${rH}
+    ${houseControlsHTML}
     ${mortgageHTML}
     ${canCreditBuy?`<div style="margin-top:.6rem;padding:.45rem;background:color-mix(in srgb,var(--purple) 10%,transparent);border:1px solid var(--purple);border-radius:8px">
       <div style="font-size:.72rem;color:var(--muted);margin-bottom:.3rem">💳 Credit available: ${CUR()}${cc.limit-cc.used}</div>
