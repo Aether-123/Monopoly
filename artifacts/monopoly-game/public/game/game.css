@@ -786,6 +786,35 @@ button { cursor: pointer; }
 .hd::before { content: '🏠'; }
 .htl { display: flex; align-items: center; justify-content: center; font-size: 13px; }
 .htl::before { content: '🏨'; }
+.sp-left .sp-hs,
+.sp-right .sp-hs {
+  top: 3px;
+  bottom: 3px;
+  width: 14px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: nowrap;
+}
+.sp-left .sp-hs {
+  left: auto;
+  right: 3px;
+}
+.sp-right .sp-hs {
+  left: 3px;
+  right: auto;
+}
+.sp-left .hd::before,
+.sp-left .htl::before {
+  display: inline-block;
+  transform: rotate(90deg);
+}
+.sp-right .hd::before,
+.sp-right .htl::before {
+  display: inline-block;
+  transform: rotate(-90deg);
+}
 .land-flash { animation: landflash .5s ease !important; }
 @keyframes landflash { 0%,100% { background: var(--card); } 35% { background: color-mix(in srgb, var(--accent) 45%, var(--card)); } }
 

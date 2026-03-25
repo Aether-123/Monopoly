@@ -56,10 +56,10 @@ const DF=["⚀","⚁","⚂","⚃","⚄","⚅"];
 const GRP_COLORS=["#ef4444","#f97316","#22c55e","#3b82f6","#a855f7","#ec4899","#14b8a6","#6366f1"];
 const DICE_FACE_TRANSFORMS={
   1:"rotateX(720deg) rotateY(720deg)",
-  2:"rotateX(630deg) rotateY(720deg)",
-  3:"rotateX(720deg) rotateY(810deg)",
-  4:"rotateX(720deg) rotateY(630deg)",
-  5:"rotateX(810deg) rotateY(720deg)",
+  2:"rotateX(810deg) rotateY(720deg)",
+  3:"rotateX(720deg) rotateY(630deg)",
+  4:"rotateX(720deg) rotateY(810deg)",
+  5:"rotateX(630deg) rotateY(720deg)",
   6:"rotateX(720deg) rotateY(900deg)",
 };
 const DICE_PIP_PATTERN={
@@ -443,8 +443,9 @@ async function onStateUpdate(newGs){
     oldGs.lastRoll[0]!==gs.lastRoll[0]||
     oldGs.lastRoll[1]!==gs.lastRoll[1]
   ));
+  const shouldAnimateRoll=!!(gs?.lastRoll&&(rollChanged||_awaitingServerRoll));
 
-  if(rollChanged){
+  if(shouldAnimateRoll){
     await animateDice(gs.lastRoll[0],gs.lastRoll[1]);
     _awaitingServerRoll=false;
     _diceRolling=false;
@@ -909,12 +910,12 @@ function showIncomingTrade({tradeId,fromId,toId,offer}){
     <div style="display:flex;gap:.6rem;flex-wrap:wrap;margin:.7rem 0">
       <div style="flex:1;min-width:120px;background:var(--bg);border-radius:8px;padding:.6rem">
         <div style="font-size:.68rem;color:var(--muted);margin-bottom:.2rem">They give you</div>
-        <div style="font-size:.78rem">${offer.toProps?.map(dp).join(", ")||"nothing"}</div>
+        <div style="font-size:.78rem">${offer.fromProps?.map(dp).join(", ")||"nothing"}</div>
         ${offer.fromMoney?`<div style="color:var(--green);font-size:.85rem;font-weight:700">+${CUR()}${offer.fromMoney}</div>`:""}
       </div>
       <div style="flex:1;min-width:120px;background:var(--bg);border-radius:8px;padding:.6rem">
         <div style="font-size:.68rem;color:var(--muted);margin-bottom:.2rem">You give</div>
-        <div style="font-size:.78rem">${offer.fromProps?.map(dp).join(", ")||"nothing"}</div>
+        <div style="font-size:.78rem">${offer.toProps?.map(dp).join(", ")||"nothing"}</div>
         ${offer.toMoney?`<div style="color:var(--red);font-size:.85rem;font-weight:700">-${CUR()}${offer.toMoney}</div>`:""}
       </div>
     </div>
@@ -977,12 +978,12 @@ function showNegotiateModal({tradeId,fromId,toId,offer,message}){
     <div style="display:flex;gap:.6rem;flex-wrap:wrap;margin:.6rem 0">
       <div style="flex:1;background:var(--bg);border-radius:8px;padding:.5rem">
         <div style="font-size:.66rem;color:var(--muted)">They give</div>
-        <div style="font-size:.76rem">${offer.toProps?.map(dp).join(", ")||"nothing"}</div>
+        <div style="font-size:.76rem">${offer.fromProps?.map(dp).join(", ")||"nothing"}</div>
         ${offer.fromMoney?`<div style="color:var(--green)">+${CUR()}${offer.fromMoney}</div>`:""}
       </div>
       <div style="flex:1;background:var(--bg);border-radius:8px;padding:.5rem">
         <div style="font-size:.66rem;color:var(--muted)">You give</div>
-        <div style="font-size:.76rem">${offer.fromProps?.map(dp).join(", ")||"nothing"}</div>
+        <div style="font-size:.76rem">${offer.toProps?.map(dp).join(", ")||"nothing"}</div>
         ${offer.toMoney?`<div style="color:var(--red)">-${CUR()}${offer.toMoney}</div>`:""}
       </div>
     </div>
@@ -1203,6 +1204,11 @@ function updateDiceOver(){
 async function animateDice(val1,val2){
   const die1=qid("die1"),die2=qid("die2");
   if(!die1||!die2)return;
+  const over=qid("dice-over");
+
+  die1.classList.remove("rolling");
+  die2.classList.remove("rolling");
+  over?.classList.remove("rolling");
 
   die1.style.transition="none";
   die2.style.transition="none";
@@ -1210,15 +1216,16 @@ async function animateDice(val1,val2){
   die2.style.transform="rotateX(0deg) rotateY(0deg)";
 
   void die1.offsetWidth;
+  void die2.offsetWidth;
 
   die1.classList.add("rolling");
   die2.classList.add("rolling");
-  qid("dice-over")?.classList.add("rolling");
+  over?.classList.add("rolling");
   await sleep(600);
 
   die1.classList.remove("rolling");
   die2.classList.remove("rolling");
-  qid("dice-over")?.classList.remove("rolling");
+  over?.classList.remove("rolling");
 
   die1.style.transition="transform 1.2s ease-out";
   die2.style.transition="transform 1.2s ease-out";
@@ -1232,6 +1239,8 @@ function _renderActionsCore(){
   const me=gs.players.find(p=>p.id===myId);
   const cur=gs.players[gs.currentPlayerIdx];
   const isMT=cur?.id===myId;
+  const hasDoubles=Array.isArray(gs.lastRoll)&&gs.lastRoll.length===2&&gs.lastRoll[0]===gs.lastRoll[1];
+  const canRollAgain=!!(isMT&&me&&!me.inJail&&!me.badDebt&&hasDoubles&&(me.turnDoublesCount||0)>0);
   const loan=me?.loans?.reduce((s,l)=>s+l.remaining,0)||0;
   if(qid("turn-box"))qid("turn-box").innerHTML=isMT
     ?`<div><span class="tname">Your Turn! 🎉</span></div><div style="font-size:.71rem;color:var(--muted)">Cash: <b style="color:var(--green)">${CUR()}${me?.money||0}</b>${me?.bankDeposit>0?` · Dep: ${CUR()}${me.bankDeposit+me.bankDepositInterest}`:""}${loan>0?` · Debt: <b style="color:var(--red)">${CUR()}${loan}</b>`:""}</div>`
@@ -1249,6 +1258,8 @@ function _renderActionsCore(){
       h+=`<button class="btn btn-acc" onclick="rollDice()">🎲 Roll Doubles</button>`;
       h+=`<button class="btn btn-out" onclick="ga('pay_jail')">💸 Pay ${CUR()}50</button>`;
       if(me.jailCards>0)h+=`<button class="btn btn-out" onclick="ga('use_jail_card')">🃏 Free Card</button>`;
+    }else if(canRollAgain){
+      h+=`<button class="btn btn-acc" onclick="rollDice()">🎲 Roll Again</button>`;
     }else{h+=`<button class="btn btn-acc" onclick="rollDice()">🎲 Roll Dice</button>`;}
   }
   if(gs.phase==="buy"){
@@ -1281,15 +1292,14 @@ function _renderActionsCore(){
   if(["hazard_event","gov_prot_event","surprise_event"].includes(gs.phase))
     h+=`<button class="btn btn-acc" style="width:100%" onclick="ga('hazard_ack');cm('m-surp');cm('m-gov')">Continue →</button>`;
   if(gs.phase==="action"){
-    h+=`<button class="btn btn-out" onclick="showBuildModal()">🏗️ Build</button>`;
     const totalLoss=(me.pendingHazardLoss||0)+(me.pendingHazardRebuildCost||0);
     if(totalLoss>0&&me.hasInsurance)h+=`<button class="btn btn-grn btn-sm" onclick="ga('claim_insurance')">🛡️ Claim ${CUR()}${Math.floor(totalLoss*(gs.settings.insurancePayout/100))}</button>`;
-    h+=`<button class="btn btn-red btn-sm" onclick="confirmDeclareBankrupt()">💀 Bankrupt</button>`;
     if(me.money<0){
       h+=`<div style="background:color-mix(in srgb,var(--red) 10%,transparent);border:1px solid var(--red);border-radius:7px;padding:.45rem;font-size:.73rem;text-align:center;color:var(--red)">Negative balance: sell, mortgage, trade, or go bankrupt.</div>`;
       h+=`<button class="btn btn-acc" disabled style="opacity:.45;cursor:not-allowed">▶ End Turn</button>`;
     }else{
-      h+=`<button class="btn btn-acc" onclick="ga('end_turn')">▶ End Turn</button>`;
+      if(canRollAgain)h+=`<button class="btn btn-acc" onclick="ga('end_turn')">🎲 Roll Again</button>`;
+      else h+=`<button class="btn btn-acc" onclick="ga('end_turn')">▶ End Turn</button>`;
     }
     if(gs.treasurePot>0)h+=`<div class="pot">💰 Pot: ${CUR()}${gs.treasurePot}</div>`;
     // Bankrupt auction button for any owned property with houses
@@ -1964,7 +1974,14 @@ function randomizeBoard(){
   toast("🔀 Board randomized");
 }
 async function getSelectionPreviewBoard(){
-  const cacheKey=`${curBoardType}|${curSize}|${curRMode}|${qid("seed-inp")?.value||curSeed}`;
+  const wwSig=curBoardType==="worldwide"
+    ? Object.entries(wwSelectedCities)
+        .filter(([,cities])=>Array.isArray(cities)&&cities.length)
+        .map(([code,cities])=>`${code}:${[...cities].sort().join(",")}`)
+        .sort()
+        .join("|")
+    : "";
+  const cacheKey=`${curBoardType}|${curSize}|${curRMode}|${qid("seed-inp")?.value||curSeed}|${wwSig}`;
   if(_boardPreviewCache[cacheKey])return _boardPreviewCache[cacheKey];
   let data={board:[],tilesPerSide:curSize};
   if(curBoardType==="random"){

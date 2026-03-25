@@ -536,6 +536,7 @@ function movePlayer(gs, idx, steps) {
   const p = gs.players[idx]; const prev = p.position;
   const total = gs.board.length;
   const startPos = gs.startPos ?? 0;
+  p._passedGoSalaryThisMove = 0;
   p.position = (p.position + steps) % total;
   const end = prev + steps;
   const passedStart = steps > 0 && (
@@ -544,6 +545,7 @@ function movePlayer(gs, idx, steps) {
   );
   if (passedStart && p.position !== startPos) {
     earnMoney(gs, idx, gs.settings.goSalary, "GO salary");
+    p._passedGoSalaryThisMove = gs.settings.goSalary;
     if (gs.treasurePot !== null && gs.treasurePot !== undefined) {
       gs.treasurePot = (gs.treasurePot || 0) + 50;
       gs.log.push(`💰 ${gs.settings.currency}50 added to Treasure (passed GO).`);
@@ -555,6 +557,7 @@ function movePlayer(gs, idx, steps) {
     }
   }
   landOn(gs, idx);
+  p._passedGoSalaryThisMove = 0;
 }
 
 function landOn(gs, idx) {
@@ -809,10 +812,26 @@ function landGovProt(gs, idx) {
 function drawSurprise(gs, idx) {
   const roll = Math.floor(Math.random() * 100);
   let card, tier;
-  if (roll === 0 && gs.settings.enableVeryGoodSurprises) { card = pick(VERY_GOOD); tier = "very_good"; }
-  else if (roll === 1 && gs.settings.enableVeryBadSurprises) { card = pick(VERY_BAD); tier = "very_bad"; }
-  else if (roll <= 49) { card = pick(BAD_SURP); tier = "bad"; }
-  else { card = pick(GOOD_SURP); tier = "good"; }
+  if (roll === 0 && gs.settings.enableVeryGoodSurprises) {
+    card = pick(VERY_GOOD); tier = "very_good";
+  }
+  else if (roll === 1 && gs.settings.enableVeryBadSurprises) {
+    card = pick(VERY_BAD); tier = "very_bad";
+  }
+  else if (roll <= 3) {
+    card = { icon:"🃏", text:"Get Out of Jail Free.", action:"jail_card" };
+    tier = "good";
+  }
+  else if (roll === 4) {
+    card = { icon:"🚔", text:"Bad luck! Go directly to Jail.", action:"jail" };
+    tier = "bad";
+  }
+  else if (roll <= 51) {
+    card = pick(BAD_SURP); tier = "bad";
+  }
+  else {
+    card = pick(GOOD_SURP); tier = "good";
+  }
   gs.chanceIdx++;
   recordCardDraw(gs.players[idx], card.text || card.title || "Surprise Card");
   gs.pendingEvent = {type:"surprise",card,tier,isSpecialCard:true};
@@ -905,6 +924,7 @@ function doEndTurn(gs, idx) {
 }
 
 function doBuild(gs, idx, data) {
+  if (gs.phase !== "action" || idx !== gs.currentPlayerIdx) return;
   const p = gs.players[idx]; const pos = data.position;
   if (pos == null || pos >= gs.board.length) return;
   const sp = gs.board[pos];
@@ -921,6 +941,7 @@ function doBuild(gs, idx, data) {
 }
 
 function doSellHouse(gs, idx, data) {
+  if (gs.phase !== "action" || idx !== gs.currentPlayerIdx) return;
   const p = gs.players[idx]; const pos = data.position;
   if (pos == null || pos >= gs.board.length) return;
   const sp = gs.board[pos];
@@ -932,6 +953,7 @@ function doSellHouse(gs, idx, data) {
 }
 
 function doMortgage(gs, idx, data) {
+  if (gs.phase !== "action" || idx !== gs.currentPlayerIdx) return;
   const p = gs.players[idx]; const pos = data.position;
   if (pos == null || pos >= gs.board.length) return;
   const sp = gs.board[pos];
@@ -941,6 +963,7 @@ function doMortgage(gs, idx, data) {
 }
 
 function doUnmortgage(gs, idx, data) {
+  if (gs.phase !== "action" || idx !== gs.currentPlayerIdx) return;
   const p = gs.players[idx]; const pos = data.position;
   if (pos == null || pos >= gs.board.length) return;
   const sp = gs.board[pos];
@@ -955,6 +978,7 @@ function doUnmortgage(gs, idx, data) {
 
 function doPayJail(gs, idx) {
   const p = gs.players[idx];
+  if (gs.phase !== "roll" || idx !== gs.currentPlayerIdx) return;
   if (!p.inJail || p.badDebt) return;
   chargeMoney(gs, idx, 50, "jail fine"); p.inJail = false; p.jailTurns = 0; gs.phase = "roll";
   gs.log.push(`${p.name} paid jail fine and is free.`);
@@ -962,6 +986,7 @@ function doPayJail(gs, idx) {
 
 function doUseJailCard(gs, idx) {
   const p = gs.players[idx];
+  if (gs.phase !== "roll" || idx !== gs.currentPlayerIdx) return;
   if (!p.inJail || p.jailCards < 1 || p.badDebt) return;
   p.jailCards--; p.inJail = false; p.jailTurns = 0; gs.phase = "roll";
   gs.log.push(`${p.name} used a Get Out of Jail card.`);
@@ -1123,6 +1148,12 @@ function chargeMoney(gs, idx, amount, _label) {
 
 function sendJail(gs, idx) {
   const p = gs.players[idx]; Object.assign(p, {position:(gs.tilesPerSide + 1),inJail:true,jailTurns:0}); gs.doublesCount = 0;
+  const passedGoSalary = Number(p._passedGoSalaryThisMove || 0);
+  if (passedGoSalary > 0) {
+    p.money -= passedGoSalary;
+    p._passedGoSalaryThisMove = 0;
+    gs.log.push(`🚫 ${p.name} does not collect GO salary when sent to jail.`);
+  }
   if (gs.treasurePot !== null && gs.treasurePot !== undefined) {
     gs.treasurePot = (gs.treasurePot || 0) + 50;
     gs.log.push(`💰 ${gs.settings.currency}50 added to Treasure (sent to jail).`);

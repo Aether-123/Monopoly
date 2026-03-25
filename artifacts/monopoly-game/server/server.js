@@ -700,7 +700,92 @@ function enforceEastTaxGovPattern(spaces) {
   return board;
 }
 
+function enforceRequestedUtilityAndTopSet(spaces) {
+  if (!Array.isArray(spaces) || !spaces.length) return spaces;
+  const board = spaces.map((sp, idx) => ({ ...(sp || {}), pos: idx }));
+  const total = board.length;
+  const C = Math.floor(total / 4);
+  if (C < 6) return board;
+
+  const toUtility = (pos, name) => {
+    if (pos <= 0 || pos >= total || pos % C === 0) return;
+    const existing = board[pos] || { pos };
+    board[pos] = {
+      ...existing,
+      pos,
+      type: "utility",
+      group: "company_set",
+      name,
+      countryCode: "",
+      countryName: "",
+      countryFlag: "",
+      stateName: undefined,
+      price: 150,
+      rents: [0, 0, 0, 0, 0, 0],
+      houseCost: 0,
+      houses: 0,
+      owner: null,
+      mortgaged: false,
+    };
+  };
+
+  const topFourthFromStart = 4;
+  const westFourthDownFromStart = (4 * C) - 4;
+  toUtility(topFourthFromStart, "Electric Company");
+  toUtility(westFourthDownFromStart, "Water Company");
+
+  const northProps = board
+    .filter((sp) => sp?.type === "property" && Number(sp.pos) > 0 && Number(sp.pos) < C)
+    .sort((a, b) => Number(a.pos) - Number(b.pos));
+
+  if (northProps.length >= 3) {
+    const firstCode = String(northProps[0].countryCode || "").toLowerCase();
+    if (firstCode) {
+      northProps[1].countryCode = northProps[0].countryCode;
+      northProps[1].countryName = northProps[0].countryName;
+      northProps[1].countryFlag = northProps[0].countryFlag;
+
+      if (String(northProps[2].countryCode || "").toLowerCase() === firstCode) {
+        const donor = northProps.find((sp, idx) => idx >= 3 && String(sp.countryCode || "").toLowerCase() !== firstCode)
+          || board.find((sp) => sp?.type === "property" && String(sp.countryCode || "").toLowerCase() !== firstCode);
+        if (donor) {
+          northProps[2].countryCode = donor.countryCode || "";
+          northProps[2].countryName = donor.countryName || "";
+          northProps[2].countryFlag = donor.countryFlag || "";
+          northProps[2].name = donor.name || northProps[2].name;
+        }
+      }
+    }
+  }
+
+  return board;
+}
+
 function buildWorldwideBoard(wwCities, size, seedSalt = "") {
+  const normalizePropertyPricing = (spaces) => {
+    const props = spaces
+      .filter(sp => sp?.type === "property")
+      .sort((a, b) => Number(a.pos) - Number(b.pos));
+    if (!props.length) return;
+    const sortedPrices = props
+      .map(sp => Math.max(20, Number(sp.price || 0)))
+      .sort((a, b) => a - b);
+    const calcRents = (price) => ([
+      Math.max(6, Math.floor(price * 0.08)),
+      Math.max(20, Math.floor(price * 0.32)),
+      Math.max(50, Math.floor(price * 0.8)),
+      Math.max(100, Math.floor(price * 1.8)),
+      Math.max(160, Math.floor(price * 2.8)),
+      Math.max(220, Math.floor(price * 3.8)),
+    ]);
+    props.forEach((sp, idx) => {
+      const nextPrice = sortedPrices[idx] ?? Number(sp.price || 100);
+      sp.price = nextPrice;
+      sp.rents = calcRents(nextPrice);
+      sp.houseCost = Math.max(50, Math.floor(nextPrice * 0.5));
+    });
+  };
+
   const board = E.generateDefaultBoard(size);
   const pools = (Array.isArray(wwCities) ? wwCities : []).map(c => ({
     code: String(c.code || "").toLowerCase(),
@@ -751,12 +836,9 @@ function buildWorldwideBoard(wwCities, size, seedSalt = "") {
   }
 
   let out = E.enforceBoardLayoutConstraints(board, size);
-  out = applyEdgeCountrySetRule(out, { seedSalt });
-  out = applyFortyFourInfrastructureRule(out);
-  out = applyFortyFourWestTaxFallback(out, { seedSalt });
-  out = applyFortyFourToFortyTwoWestTrim(out);
-  out = enforceSingleTaxReturnTile(out);
   out = enforceEastTaxGovPattern(out);
+  normalizePropertyPricing(out);
+  out = enforceRequestedUtilityAndTopSet(out);
   return out;
 }
 
@@ -767,6 +849,13 @@ function normalizeMapConfig(mapCfg) {
   const skipEdgeRule = DOMESTIC_PRESETS.has(preset);
   const shouldApplyEdgeRule = !skipEdgeRule && preset !== "worldwide";
   cfg.tilesPerSide = size;
+
+  if (preset === "worldwide" && Array.isArray(cfg.wwCities) && cfg.wwCities.length) {
+    cfg.spaces = buildWorldwideBoard(cfg.wwCities, size, cfg.seed || "");
+    cfg.spaces = enforceRequestedUtilityAndTopSet(cfg.spaces);
+    return cfg;
+  }
+
   if (Array.isArray(cfg.spaces) && cfg.spaces.length) {
     cfg.spaces = E.enforceBoardLayoutConstraints(cfg.spaces, size);
     // Apply normalization rules to custom editor boards too
@@ -779,11 +868,7 @@ function normalizeMapConfig(mapCfg) {
       cfg.spaces = enforceSingleTaxReturnTile(cfg.spaces);
     }
     cfg.spaces = enforceEastTaxGovPattern(cfg.spaces);
-    return cfg;
-  }
-
-  if (cfg.preset === "worldwide" && Array.isArray(cfg.wwCities) && cfg.wwCities.length) {
-    cfg.spaces = buildWorldwideBoard(cfg.wwCities, size, cfg.seed || "");
+    cfg.spaces = enforceRequestedUtilityAndTopSet(cfg.spaces);
     return cfg;
   }
 
@@ -797,6 +882,7 @@ function normalizeMapConfig(mapCfg) {
     cfg.spaces = swapSouthLuxuryTaxWithAdjacentCity(cfg.spaces);
     cfg.spaces = enforceSingleTaxReturnTile(cfg.spaces);
     cfg.spaces = enforceEastTaxGovPattern(cfg.spaces);
+    cfg.spaces = enforceRequestedUtilityAndTopSet(cfg.spaces);
     return cfg;
   }
 
@@ -811,6 +897,7 @@ function normalizeMapConfig(mapCfg) {
       cfg.spaces = enforceSingleTaxReturnTile(cfg.spaces);
     }
     cfg.spaces = enforceEastTaxGovPattern(cfg.spaces);
+    cfg.spaces = enforceRequestedUtilityAndTopSet(cfg.spaces);
     return cfg;
   }
 
@@ -824,6 +911,7 @@ function normalizeMapConfig(mapCfg) {
     cfg.spaces = enforceSingleTaxReturnTile(cfg.spaces);
   }
   cfg.spaces = enforceEastTaxGovPattern(cfg.spaces);
+  cfg.spaces = enforceRequestedUtilityAndTopSet(cfg.spaces);
   return cfg;
 }
 
@@ -1372,7 +1460,7 @@ app.use(express.json({ limit: "1mb" }));
 app.post("/mapi/worldwide-board", (req, res) => {
   const S = Math.max(6, Math.min(parseInt(req.body?.S || "9"), 9));
   const wwCities = Array.isArray(req.body?.wwCities) ? req.body.wwCities : [];
-  const board = buildWorldwideBoard(wwCities, S);
+  const board = enforceRequestedUtilityAndTopSet(buildWorldwideBoard(wwCities, S));
   res.json({ board, tilesPerSide: S });
 });
 
@@ -1388,6 +1476,7 @@ app.get("/mapi/domestic-board", (req, res) => {
   board = swapSouthLuxuryTaxWithAdjacentCity(board);
   board = enforceSingleTaxReturnTile(board);
   board = enforceEastTaxGovPattern(board);
+  board = enforceRequestedUtilityAndTopSet(board);
   res.json({preset, board, tilesPerSide: S});
 });
 
@@ -1404,6 +1493,7 @@ app.get("/mapi/random-board", (req, res) => {
   board = swapSouthLuxuryTaxWithAdjacentCity(board);
   board = enforceSingleTaxReturnTile(board);
   board = enforceEastTaxGovPattern(board);
+  board = enforceRequestedUtilityAndTopSet(board);
   res.json({seed, board, tilesPerSide: S});
 });
 
@@ -1417,6 +1507,7 @@ app.get("/mapi/default-board", (req, res) => {
   board = swapSouthLuxuryTaxWithAdjacentCity(board);
   board = enforceSingleTaxReturnTile(board);
   board = enforceEastTaxGovPattern(board);
+  board = enforceRequestedUtilityAndTopSet(board);
   res.json({board, tilesPerSide: S});
 });
 
