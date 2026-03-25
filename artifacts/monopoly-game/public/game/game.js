@@ -20,6 +20,13 @@ let _awaitingServerRoll=false;
 let _isLobbyHost=false;
 let _boardPreviewCache={};
 let _loadingCountriesPromise=null;
+let _lastBoardRenderKey="";
+let _lastBoardSizeKey="";
+let _lastPanelsRenderKey="";
+let _resizeRenderTimer=null;
+let _stateUpdateInFlight=false;
+let _queuedGameState=null;
+let _deferredSidePanelRender=false;
 const ENABLE_BOARD_SELECT_UI=true;
 const ENABLE_MAP_EDITOR_UI=false;
 
@@ -400,7 +407,7 @@ function _initSocketCore(){
   socket.on("start_error",({message})=>toast("❌ "+(message||"Cannot start game yet.")));
   socket.on("lobby_update",d=>{lobbyData=d;roomHostId=d.hostId;renderLobby();});
   socket.on("game_started",({gameState})=>{gs=gameState;ss("game");renderGame(true);cm("m-win");});
-  socket.on("state_update",({gameState})=>onStateUpdate(gameState));
+  socket.on("state_update",({gameState})=>enqueueStateUpdate(gameState));
   socket.on("game_over",({winnerId})=>{try{localStorage.removeItem("mono_game_session");}catch(e){}showWin(winnerId);});
   socket.on("board_selected",({mapConfig})=>{toast("🗺️ New board selected. Waiting for host to restart game...");});
   socket.on("trade_incoming",d=>showIncomingTrade(d));
@@ -443,6 +450,12 @@ function ss(n){
 async function onStateUpdate(newGs){
   const oldGs=gs;
   gs=newGs;
+  let boardChanged=!oldGs;
+  if(oldGs){
+    if((oldGs.tilesPerSide||9)!==(gs.tilesPerSide||9)||oldGs.hazardPos!==gs.hazardPos||oldGs.taxReturnPos!==gs.taxReturnPos||oldGs.randomTaxPos!==gs.randomTaxPos||oldGs.board.length!==gs.board.length){
+      boardChanged=true;
+    }
+  }
   const rollChanged=!!(oldGs&&gs?.lastRoll&&(
     !oldGs.lastRoll||
     oldGs.lastRoll[0]!==gs.lastRoll[0]||
@@ -462,6 +475,16 @@ async function onStateUpdate(newGs){
       if(!old)continue;
       const delta=p.money-old.money;
       if(Math.abs(delta)>0)animateMoneyDelta(p.id,delta);
+    }
+    if(!boardChanged){
+      for(let i=0;i<gs.board.length;i++){
+        const sp=gs.board[i];
+        const oldSp=oldGs.board[i];
+        if(!oldSp||sp?.owner!==oldSp.owner||sp?.houses!==oldSp.houses||sp?.mortgaged!==oldSp.mortgaged||sp?.type!==oldSp.type||sp?.name!==oldSp.name||sp?.price!==oldSp.price){
+          boardChanged=true;
+          break;
+        }
+      }
     }
     // Detect property purchases (owner changed)
     const now=Date.now();
@@ -483,13 +506,38 @@ async function onStateUpdate(newGs){
       await animateTokenStep(p.id,old.position,p.position,gs.board.length);
     }
   }
-  renderGame(false);
+  renderGame(false,boardChanged);
   handlePendingEvent();
   // Auction state
   if(gs.phase==="auction"&&gs.auction?.active){
     renderAuctionModal();
   }else{
     stopAuctionTimer();cm("m-auction");
+  }
+}
+
+function enqueueStateUpdate(gameState){
+  _queuedGameState=gameState;
+  flushStateUpdates();
+}
+
+async function flushStateUpdates(){
+  if(_stateUpdateInFlight)return;
+  _stateUpdateInFlight=true;
+  try{
+    while(_queuedGameState){
+      const next=_queuedGameState;
+      _queuedGameState=null;
+      await onStateUpdate(next);
+    }
+  }finally{
+    _stateUpdateInFlight=false;
+    if(_deferredSidePanelRender&&gs){
+      _deferredSidePanelRender=false;
+      renderSidePanels();
+      renderBoardActionLog();
+      _lastPanelsRenderKey=buildPanelsRenderKey();
+    }
   }
 }
 
@@ -513,11 +561,13 @@ async function animateTokenStep(playerId,from,to,boardLen){
   _tokenMoving=true;
   const S=gs?.tilesPerSide||9;
   const {cPx,tPx}=getBoardDims(S);
+  const stepDelay=85;
   let cur=from;
   const steps=to>=from?to-from:boardLen-from+to;
   if(steps>12){
     const tok=qid("tok-"+playerId);
     if(tok){
+      tok.style.transition="left .18s linear, top .18s linear";
       const {x,y}=txy(to,S,cPx,tPx);
       const off=getTokenOffsets(playerId);
       tok.style.left=(x+off.ox-18)+"px";
@@ -531,22 +581,63 @@ async function animateTokenStep(playerId,from,to,boardLen){
   for(let i=0;i<steps;i++){
     cur=(cur+1)%boardLen;
     const tok=qid("tok-"+playerId);if(!tok)break;
+    tok.style.transition=`left ${stepDelay}ms linear, top ${stepDelay}ms linear`;
     const {x,y}=txy(cur,S,cPx,tPx);
     const off=getTokenOffsets(playerId);
     tok.style.left=(x+off.ox-18)+"px";tok.style.top=(y+off.oy-18)+"px";
     if(i===steps-1){tok.classList.remove("landing");void tok.offsetWidth;tok.classList.add("landing");flashTile(cur);}
-    await sleep(i===steps-1?0:120);
+    await sleep(i===steps-1?0:stepDelay);
   }
   _tokenMoving=false;
 }
 
 function flashTile(pos){
-  document.querySelectorAll(".sp").forEach(t=>{
-    if(parseInt(t.dataset.pos)===pos){
-      t.classList.remove("land-flash");void t.offsetWidth;t.classList.add("land-flash");
-      setTimeout(()=>t.classList.remove("land-flash"),600);
-    }
-  });
+  const tile=qid("game-board")?.querySelector(`[data-pos="${pos}"]`);
+  if(!tile)return;
+  tile.classList.remove("land-flash");
+  void tile.offsetWidth;
+  tile.classList.add("land-flash");
+  setTimeout(()=>tile.classList.remove("land-flash"),600);
+}
+
+function buildBoardRenderKey(){
+  if(!gs||!Array.isArray(gs.board))return"";
+  const staticBits=[gs.tilesPerSide||9,gs.hazardPos??-1,gs.taxReturnPos??-1,gs.randomTaxPos??-1];
+  const dynamicBits=gs.board.map(sp=>`${sp?.type||""}|${sp?.owner||""}|${sp?.houses||0}|${sp?.mortgaged?1:0}`).join(";");
+  return `${staticBits.join("|")}|${dynamicBits}`;
+}
+
+function buildPanelsRenderKey(){
+  if(!gs||!Array.isArray(gs.players))return"";
+  const playersKey=gs.players.map(p=>[
+    p.id,
+    p.money||0,
+    p.position||0,
+    p.inJail?1:0,
+    p.bankrupted?1:0,
+    p.disconnected?1:0,
+    p.isSpectator?1:0,
+    (p.properties||[]).length,
+    p.bankDeposit||0,
+    p.bankDepositInterest||0,
+    (p.loans||[]).length,
+    p.hasInsurance?1:0,
+  ].join(":" )).join(";");
+  const me=gs.players.find(p=>p.id===myId);
+  const tradesLen=(gs.tradeRequests||[]).length;
+  const logTail=(gs.log||[]).slice(-1)[0]||"";
+  return [
+    gs.phase||"",
+    gs.currentPlayerIdx??-1,
+    gs.turnHasRolled?1:0,
+    gs.treasurePot||0,
+    tradesLen,
+    (gs.log||[]).length,
+    logTail,
+    me?.pendingHazardLoss||0,
+    me?.pendingHazardRebuildCost||0,
+    playersKey,
+  ].join("|");
 }
 
 /* ─── BOARD GEOMETRY ────────────────────────────────────── */
@@ -592,7 +683,7 @@ function getTokenOffsets(playerId){
 }
 
 /* ─── RENDER GAME ───────────────────────────────────────── */
-function renderGame(init){
+function renderGame(init,forceBoard=false){
   if(!gs)return;
   
   // Clean slate for new game
@@ -601,13 +692,33 @@ function renderGame(init){
     if(board)board.innerHTML="";
   }
   
-  // Render board and tokens
-  renderBoard();
+  // Render board only when required
+  const S=gs.tilesPerSide||9;
+  const dims=getBoardDims(S);
+  const sizeKey=`${S}:${dims.cPx}:${dims.tPx}`;
+  const boardKey=buildBoardRenderKey();
+  const mustRenderBoard=!!(init||forceBoard||boardKey!==_lastBoardRenderKey||sizeKey!==_lastBoardSizeKey);
+  if(mustRenderBoard){
+    renderBoard();
+    _lastBoardRenderKey=boardKey;
+    _lastBoardSizeKey=sizeKey;
+  }
   renderTokensInstant(init);
   updateDiceOver();
   renderActions();
-  renderSidePanels();
-  renderBoardActionLog();
+  const panelsKey=buildPanelsRenderKey();
+  if(init||panelsKey!==_lastPanelsRenderKey){
+    const animationBusy=!!(_tokenMoving||_diceRolling);
+    if(!init&&animationBusy){
+      _deferredSidePanelRender=true;
+    }else{
+      renderSidePanels();
+      renderBoardActionLog();
+      _lastPanelsRenderKey=panelsKey;
+    }
+  }
+  const gameCode=qid("game-room-code-display");
+  if(gameCode)gameCode.textContent=(myRoomId||lobbyData?.roomId||"—");
 }
 function renderSidePanels(){renderPlayersPanel();renderPropsPanel();renderStatusPanel();renderTradePanel();renderBankPanel();}
 
@@ -725,14 +836,16 @@ function renderBoard(){
 function renderTokensInstant(init){
   const tokenContainer=qid("board-wrap");
   if(!tokenContainer||!gs)return;
-  
-  // Remove all existing tokens
-  document.querySelectorAll(".ptok").forEach(t=>t.remove());
+  if(init){
+    document.querySelectorAll(".ptok").forEach(t=>t.remove());
+  }
   
   const S=gs.tilesPerSide||9;
   const{cPx,tPx}=getBoardDims(S);
   const TOKEN_SIZE=26;
   const TOKEN_HALF=TOKEN_SIZE/2;
+  const activeTokenIds=new Set(gs.players.filter(p=>!p.bankrupted).map(p=>`tok-${p.id}`));
+  document.querySelectorAll(".ptok").forEach(el=>{if(!activeTokenIds.has(el.id))el.remove();});
   
   gs.players.forEach((p,playerIdx)=>{
     if(p.bankrupted)return;
@@ -750,29 +863,28 @@ function renderTokensInstant(init){
     const posX=tileX+offsetX-TOKEN_HALF;
     const posY=tileY+offsetY-TOKEN_HALF;
     
-    // Create token
-    const tok=document.createElement("canvas");
-    tok.width=tok.height=TOKEN_SIZE;
-    tok.className="ptok"+(playerIdx===gs.currentPlayerIdx?" cur-player":"");
-    tok.id="tok-"+p.id;
+    let tok=qid("tok-"+p.id);
+    const needsCreate=!tok;
+    if(!tok){
+      tok=document.createElement("canvas");
+      tok.width=tok.height=TOKEN_SIZE;
+      tok.className="ptok";
+      tok.id="tok-"+p.id;
+      tokenContainer.appendChild(tok);
+    }
+    tok.classList.toggle("cur-player",playerIdx===gs.currentPlayerIdx);
     tok.title=`${p.name}: ${CUR()}${p.money}`;
     tok.style.cssText=`position:absolute;left:${posX}px;top:${posY}px;border-radius:50%;cursor:default;z-index:${playerIdx+10};`;
-    
-    // Draw avatar
-    drawAvatar(tok,p.avatar||{},TOKEN_SIZE);
-    
-    // Draw colored border
-    const ctx=tok.getContext("2d");
-    ctx.strokeStyle=p.color;
-    ctx.lineWidth=2;
-    ctx.beginPath();
-    ctx.arc(TOKEN_HALF,TOKEN_HALF,TOKEN_HALF-1,0,Math.PI*2);
-    ctx.stroke();
-    
-    // Add drop animation
-    if(init){tok.style.animation="tokenDrop .4s ease";}
-    
-    tokenContainer.appendChild(tok);
+    if(needsCreate){
+      drawAvatar(tok,p.avatar||{},TOKEN_SIZE);
+      const ctx=tok.getContext("2d");
+      ctx.strokeStyle=p.color;
+      ctx.lineWidth=2;
+      ctx.beginPath();
+      ctx.arc(TOKEN_HALF,TOKEN_HALF,TOKEN_HALF-1,0,Math.PI*2);
+      ctx.stroke();
+      if(init){tok.style.animation="tokenDrop .4s ease";}
+    }
   });
 }
 
@@ -1047,25 +1159,27 @@ function showChipInOffer(tradeId,fromId,toId,targetIds){
     </div>
     <input class="inp" id="chip-msg" placeholder="Message (optional)" maxlength="200" style="width:100%;margin-bottom:.4rem">
     <div style="display:flex;gap:.4rem">
-      <button class="btn btn-acc" onclick="sendChipIn('${tradeId}',${JSON.stringify(targetIds)})">💡 Send Offer</button>
+      <button class="btn btn-acc" onclick="sendChipIn('${tradeId}',${JSON.stringify(targetIds)},'${fromId}','${toId}')">💡 Send Offer</button>
       <button class="btn btn-out" onclick="cm('m-chip')">Cancel</button>
     </div>`;
   cm("m-t-in");
   om("m-chip");
 }
 
-function sendChipIn(tradeId,targetIds){
+function sendChipIn(tradeId,targetIds,fromId,toId){
   if(!targetIds||targetIds.length===0){toast("Select target players");return;}
   const fp=[...document.querySelectorAll("[id^='chip-f-'].sel")].map(e=>parseInt(e.id.split("-")[2]));
   const t1p=[...document.querySelectorAll("[id^='chip-t1-'].sel")].map(e=>parseInt(e.id.split("-")[2]));
   const t2p=[...document.querySelectorAll("[id^='chip-t2-'].sel")].map(e=>parseInt(e.id.split("-")[2]));
   
   const wants={};
-  if(targetIds[0]&&targetIds.length>0){
-    if(t1p.length>0||qid("chip-t1m")?.value>0) wants[targetIds[0]]={props:t1p,money:+qid("chip-t1m")?.value||0};
+  if(fromId&&targetIds.includes(fromId)){
+    const m1=+qid("chip-t1m")?.value||0;
+    if(t1p.length>0||m1>0) wants[fromId]={props:t1p,money:m1};
   }
-  if(targetIds[1]&&targetIds.length>1){
-    if(t2p.length>0||qid("chip-t2m")?.value>0) wants[targetIds[1]]={props:t2p,money:+qid("chip-t2m")?.value||0};
+  if(toId&&targetIds.includes(toId)){
+    const m2=+qid("chip-t2m")?.value||0;
+    if(t2p.length>0||m2>0) wants[toId]={props:t2p,money:m2};
   }
   
   socket.emit("trade_chip_in",{
@@ -1419,11 +1533,11 @@ async function animateDice(val1,val2){
   die2.classList.remove("rolling");
   over?.classList.remove("rolling");
 
-  die1.style.transition="transform 1.2s ease-out";
-  die2.style.transition="transform 1.2s ease-out";
+  die1.style.transition="transform .7s ease-out";
+  die2.style.transition="transform .7s ease-out";
   setDieFace(die1,val1);
   setDieFace(die2,val2);
-  await sleep(1200);
+  await sleep(700);
 }
 
 function _renderActionsCore(){
@@ -1517,6 +1631,8 @@ function renderAuctionModal(){
   const gi=sp?.group?parseInt(sp.group.slice(1)):-1;
   const gc=gi>=0?GRP_COLORS[gi]:"#888";
   const ps=auc.propertySnapshot||{};
+  const activePlayers=gs.players.filter(p=>!p.bankrupted&&!p.isSpectator);
+  const moneyRows=activePlayers.map(p=>`<div style="display:flex;justify-content:space-between;font-size:.72rem"><span style="color:${p.color}">${p.name}${p.id===myId?" (You)":""}</span><b>${CUR()}${p.money||0}</b></div>`).join("");
   const CIRC=100;
   qid("auction-c").innerHTML=`
     <div class="auc-header">
@@ -1544,6 +1660,10 @@ function renderAuctionModal(){
       <span>List price: <b>${CUR()}${ps.price||sp?.price||0}</b></span>
       ${ps.rents?`<span>Base rent: <b>${CUR()}${ps.rents[0]||0}</b></span>`:""}
       ${ps.stateName?`<span>📍 ${ps.stateName}</span>`:""}
+    </div>
+    <div style="margin-top:.35rem;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:.4rem">
+      <div style="font-size:.68rem;color:var(--muted);margin-bottom:.25rem">Players' Money</div>
+      ${moneyRows}
     </div>
     ${(ps.type==="property"&&ps.rents)?`<table class="rtbl" style="margin-top:.25rem"><tr><th>Level</th><th>Rent</th></tr>${["Base","1🏠","2🏠","3🏠","4🏠","🏨"].map((lbl,i)=>`<tr><td>${lbl}</td><td>${CUR()}${ps.rents[i]||0}</td></tr>`).join("")}</table>`:""}
     ${(ps.type==="airport")?`<table class="rtbl" style="margin-top:.25rem"><tr><th>Owned Airports</th><th>Rent</th></tr><tr><td>1</td><td>${CUR()}100</td></tr><tr><td>2</td><td>${CUR()}200</td></tr></table>`:""}
@@ -1703,11 +1823,12 @@ function showPropModal(pos){
     rH=`<div style="margin-top:.35rem;padding:.45rem;border:1px solid var(--border);border-radius:8px;background:var(--bg);font-size:.74rem;color:var(--muted)">🔒 Rent/transport details unlock after you land on this tile or own it.</div>`;
   }
   const isMyTurn=gs.players[gs.currentPlayerIdx]?.id===myId;
+  const rolledThisTurn=!!gs.turnHasRolled&&isMyTurn;
   const isBuyPhase=gs.phase==="buy"&&me?.position===pos&&gs.players[gs.currentPlayerIdx]?.id===myId;
   const cc=me?.creditCard;
   const canCreditBuy=isBuyPhase&&!own&&cc?.active&&(cc.limit-cc.used)>=(sp.price||0);
   const modalPrefix="";
-  const canManageMortgage=own&&me&&own.id===myId&&isMyTurn;
+  const canManageMortgage=own&&me&&own.id===myId&&isMyTurn&&!rolledThisTurn;
   const isMyProperty=own&&me&&own.id===myId&&sp.type==="property";
   const canManageHouses=isMyProperty&&!sp.mortgaged;
   const mortgagedAmount=Math.floor((sp.price||0)*0.75);
@@ -1741,6 +1862,7 @@ function showPropModal(pos){
       <div style="font-size:.7rem;color:var(--muted);margin-top:.3rem">Level rule: build evenly across country properties.</div>
       ${!isMyTurn?`<div style="font-size:.7rem;color:var(--muted);margin-top:.3rem">House actions available on your turn.</div>`:""}
       <div style="font-size:.7rem;color:var(--muted);margin-top:.25rem">Demolish refund: 50% of house cost.</div>
+      ${rolledThisTurn?`<div style="font-size:.7rem;color:var(--orange);margin-top:.3rem">Mortgage actions are locked after rolling.</div>`:""}
     </div>`:"";
   const mortgageHTML=canManageMortgage
     ?(sp.mortgaged
@@ -1849,8 +1971,11 @@ function showBuildModal(){
 }
 function showMortModal(){
   const me=gs.players.find(p=>p.id===myId);
+  const isMyTurn=gs.players[gs.currentPlayerIdx]?.id===myId;
+  const mortgageLocked=!isMyTurn||!!gs.turnHasRolled;
   const myProps=gs.board.filter(s=>["property","airport","railway","utility"].includes(s.type)&&s.owner===me.id);
   qid("mort-c").innerHTML=`<h2>🔒 Mortgage</h2>
+    ${mortgageLocked?`<div style="font-size:.72rem;color:var(--orange);margin-bottom:.4rem">Mortgage actions are available only before you roll on your turn.</div>`:""}
     <div style="display:flex;flex-direction:column;gap:.3rem">
       ${myProps.map(s=>{
         const gi=s.group?parseInt(s.group.slice(1)):-1;
@@ -1858,8 +1983,8 @@ function showMortModal(){
           ${gi>=0?`<div style="width:8px;height:8px;border-radius:50%;background:${GRP_COLORS[gi]}"></div>`:""}
           <span style="flex:1;font-size:.78rem">${cityLabel(s)}</span>
           ${s.mortgaged
-            ?`<span style="font-size:.7rem;color:var(--red)">Mortgaged</span><button class="btn btn-sm btn-grn" onclick="ga('unmortgage',{position:${s.pos}})">Unmortgage ${CUR()}${Math.floor(s.price*.75)+Math.ceil(Math.floor(s.price*.75)*0.05)}</button>`
-            :`<button class="btn btn-sm btn-out" onclick="ga('mortgage',{position:${s.pos}})">Mortgage ${CUR()}${Math.floor(s.price*.75)}</button>`}
+            ?`<span style="font-size:.7rem;color:var(--red)">Mortgaged</span><button class="btn btn-sm btn-grn" ${mortgageLocked?"disabled":""} onclick="ga('unmortgage',{position:${s.pos}})">Unmortgage ${CUR()}${Math.floor(s.price*.75)+Math.ceil(Math.floor(s.price*.75)*0.05)}</button>`
+            :`<button class="btn btn-sm btn-out" ${mortgageLocked?"disabled":""} onclick="ga('mortgage',{position:${s.pos}})">Mortgage ${CUR()}${Math.floor(s.price*.75)}</button>`}
         </div>`;
       }).join("")}
     </div>
@@ -3158,7 +3283,14 @@ window.addEventListener("DOMContentLoaded",()=>{
   const m=location.pathname.match(/\/room\/([A-Z0-9]{6})/i);
   if(m){if(qid("jr-code"))qid("jr-code").value=m[1].toUpperCase();toast("Room code pre-filled: "+m[1]);}
 });
-window.addEventListener("resize",()=>{applyTouchUIClass();if(gs)renderGame(false);if(qid("sc-editor").classList.contains("active"))editorRenderBoard();});
+window.addEventListener("resize",()=>{
+  applyTouchUIClass();
+  if(_resizeRenderTimer)clearTimeout(_resizeRenderTimer);
+  _resizeRenderTimer=setTimeout(()=>{
+    if(gs)renderGame(false,true);
+    if(qid("sc-editor").classList.contains("active"))editorRenderBoard();
+  },80);
+});
 
 /* ═══════════════════════════════════════════════════════
    RECONNECTION / VOTEKICK / SPECTATE — appended section

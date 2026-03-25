@@ -375,6 +375,11 @@
   </div>
   <div class="gl-right">
     <div class="panel-hdr">👥 Players</div>
+    <div style="padding:.45rem .7rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">
+      <span style="font-size:.68rem;color:var(--muted)">Room:</span>
+      <span id="game-room-code-display" style="font-size:.8rem;font-weight:800;letter-spacing:.5px">—</span>
+      <button class="btn btn-sm btn-out" onclick="copyRoomCode()">Copy</button>
+    </div>
     <div id="panel-players" class="panel-scroll" style="max-height:230px"></div>
     <div class="panel-hdr" style="border-top:1px solid var(--border)">💱 Trade</div>
     <div id="panel-trade" class="panel-scroll" style="flex:1;min-height:0">

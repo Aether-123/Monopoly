@@ -329,6 +329,7 @@ export function initGame(room) {
   return {
     board, players, tilesPerSide: S,
     currentPlayerIdx: 0, phase: "roll",
+    turnHasRolled: false,
     lastRoll: null, doublesCount: 0,
     log: [`🎲 Game started! ${players[0].name} goes first.`, `🎲 Turn order: ${players.map(p => p.name).join(" → ")}`],
     settings: { ...room.settings },
@@ -436,6 +437,7 @@ function recordCardDraw(p, text) {
 // ════════════════════════════════════════════════
 function doRoll(gs, idx) {
   if (gs.phase !== "roll") return;
+  gs.turnHasRolled = true;
   const p = gs.players[idx];
   if ((p.money || 0) < 0) {
     gs.log.push(`⚠️ ${p.name} cannot roll with negative balance.`);
@@ -870,11 +872,18 @@ function applyCard(gs, idx, card, surprise) {
   else if (a === "goto") {
     const startPos = gs.startPos ?? 0;
     const targetPos = (card.position === 0) ? startPos : card.position;
+    gs.pendingEvent = null;
     p.position = targetPos;
     landOn(gs, idx); return;
   }
-  else if (a === "jail")          { sendJail(gs, idx); gs.phase = "action"; return; }
-  else if (a === "back3")         { p.position = Math.max(0, p.position - 3); landOn(gs, idx); return; }
+  else if (a === "jail")          { gs.pendingEvent = null; sendJail(gs, idx); gs.phase = "action"; return; }
+  else if (a === "back3")         {
+    gs.pendingEvent = null;
+    const total = gs.board.length || 1;
+    p.position = ((p.position - 3) % total + total) % total;
+    landOn(gs, idx);
+    return;
+  }
   else if (a === "jail_card")     p.jailCards++;
   else if (a === "gov_card")      { p.govProtCards++; gs.log.push(`🏛️ ${p.name} got a Gov Protection card!`); }
   else if (a === "insurance_free") {
@@ -959,6 +968,7 @@ function doSellHouse(gs, idx, data) {
 
 function doMortgage(gs, idx, data) {
   if (gs.phase !== "action" || idx !== gs.currentPlayerIdx) return;
+  if (gs.turnHasRolled) return;
   const p = gs.players[idx]; const pos = data.position;
   if (pos == null || pos >= gs.board.length) return;
   const sp = gs.board[pos];
@@ -969,6 +979,7 @@ function doMortgage(gs, idx, data) {
 
 function doUnmortgage(gs, idx, data) {
   if (gs.phase !== "action" || idx !== gs.currentPlayerIdx) return;
+  if (gs.turnHasRolled) return;
   const p = gs.players[idx]; const pos = data.position;
   if (pos == null || pos >= gs.board.length) return;
   const sp = gs.board[pos];
@@ -1051,17 +1062,26 @@ function doGoPayEmi(gs, idx) {
 //  BANK
 // ════════════════════════════════════════════════
 function doBankDeposit(gs, idx, data) {
-  const p = gs.players[idx]; const amt = Math.min(data.amount || 100, p.money);
+  const p = gs.players[idx];
+  const req = Number(data?.amount);
+  const cash = Math.max(0, Number(p.money || 0));
+  const ask = Number.isFinite(req) && req > 0 ? req : 100;
+  const amt = Math.min(ask, cash);
   if (amt <= 0) return;
   p.money -= amt; p.bankDeposit += amt;
   gs.log.push(`🏦 ${p.name} deposited ${gs.settings.currency}${amt}`);
 }
 
 function doBankWithdraw(gs, idx, data) {
-  const p = gs.players[idx]; const mx = p.bankDeposit + p.bankDepositInterest;
-  const amt = Math.min(data.amount || mx, mx);
+  const p = gs.players[idx];
+  const principal = Math.max(0, Number(p.bankDeposit || 0));
+  const interest = Math.max(0, Number(p.bankDepositInterest || 0));
+  const mx = principal + interest;
+  const req = Number(data?.amount);
+  const ask = Number.isFinite(req) && req > 0 ? req : mx;
+  const amt = Math.min(ask, mx);
   if (amt <= 0) return;
-  const fi = Math.min(amt, p.bankDepositInterest); const fp = amt - fi;
+  const fi = Math.min(amt, interest); const fp = amt - fi;
   p.bankDepositInterest -= fi; p.bankDeposit -= fp; p.money += amt;
   gs.log.push(`🏦 ${p.name} withdrew ${gs.settings.currency}${amt}`);
 }
@@ -1192,6 +1212,28 @@ function forceBankrupt(gs, idx, logMessage) {
   return true;
 }
 
+export function releasePlayerAssets(gs, playerId, reason = "asset-release") {
+  if (!gs || !Array.isArray(gs.players) || !Array.isArray(gs.board)) return false;
+  const p = gs.players.find(pl => pl && pl.id === playerId);
+  if (!p) return false;
+  for (const sp of gs.board) {
+    if (sp?.owner === playerId) {
+      Object.assign(sp, { owner: null, houses: 0, mortgaged: false });
+    }
+  }
+  p.properties = [];
+  p.bankDeposit = 0;
+  p.bankDepositInterest = 0;
+  p.loans = [];
+  p.creditCard = null;
+  p.hasInsurance = false;
+  p.pendingHazardLoss = 0;
+  p.pendingHazardHouses = 0;
+  p.pendingHazardRebuildCost = 0;
+  if (reason) gs.log.push(`♻️ ${p.name}'s properties were released (${reason}).`);
+  return true;
+}
+
 export function nextTurn(gs) {
   let n = (gs.currentPlayerIdx + 1) % gs.players.length;
   let loops = 0;
@@ -1214,7 +1256,7 @@ export function nextTurn(gs) {
   const chosen = gs.players[n];
   if (!chosen || chosen.bankrupted || chosen.disconnected || chosen.isSpectator) return;
   if (gs.players[n]) gs.players[n].turnDoublesCount = 0;
-  Object.assign(gs, {currentPlayerIdx:n, phase:"roll", doublesCount:0});
+  Object.assign(gs, {currentPlayerIdx:n, phase:"roll", doublesCount:0, turnHasRolled:false});
   gs.turnInRound++;
   const alive = gs.players.filter(p => !p.bankrupted && !p.disconnected && !p.isSpectator);
   if (alive.length > 0 && gs.turnInRound >= alive.length) {

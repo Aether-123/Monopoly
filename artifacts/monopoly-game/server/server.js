@@ -1437,6 +1437,7 @@ function resetTurnTimer(room, _reason = "turn") {
     actor.isSpectator = true;
     actor.disconnected = false;
     actor.reconnectDeadline = null;
+    E.releasePlayerAssets(st, actor.id, "inactivity-timeout");
     if (!liveRoom.spectators) liveRoom.spectators = [];
     liveRoom.spectators.push({ id: actor.id, name: actor.name, reason: "turn-timeout" });
     st.log.push(`⏱️ ${actor.name} removed for inactivity (no roll/end turn within 5 minutes).`);
@@ -1467,6 +1468,7 @@ function startReconnect(rid, playerId) {
       const gp = findGp(gs, playerId);
       if (gp && gp.disconnected) {
         gp.isSpectator = true; gp.disconnected = false;
+        E.releasePlayerAssets(gs, playerId, "disconnect-timeout");
         if (!room.spectators) room.spectators = [];
         room.spectators.push({id:playerId,name:gp.name,reason:"timeout"});
         gs.log.push(`⏱️ ${gp.name} timed out → spectator.`);
@@ -1839,9 +1841,20 @@ io.on("connection", (socket) => {
     const playerId = pid(socket.id);
     const pi = gs.players.findIndex(p => p.id === playerId);
     if (pi === -1 || gs.players[pi].isSpectator || gs.players[pi].disconnected) return;
-    if (gs.currentPlayerIdx !== pi) return;
     data = data || {};
     const action = sanitize(data.action || "", 30);
+    const bankActions = new Set([
+      "bank_deposit",
+      "bank_withdraw",
+      "bank_loan",
+      "bank_repay",
+      "bank_credit",
+      "bank_pay_emi",
+      "bank_insurance",
+      "claim_insurance",
+    ]);
+    const isBankAction = bankActions.has(action);
+    if (!isBankAction && gs.currentPlayerIdx !== pi) return;
     const prevCurrentIdx = gs.currentPlayerIdx;
     const prevRoll = Array.isArray(gs.lastRoll) ? `${gs.lastRoll[0]}-${gs.lastRoll[1]}` : "";
     room.gameState = E.processAction(gs, pi, action, data.data || {});
@@ -1906,8 +1919,9 @@ io.on("connection", (socket) => {
     io.to(room.id).emit("vote_update", {targetId,targetName:targetP.name,votes:voteCount,needed});
     if (voteCount >= needed) {
       targetP.isSpectator = true; targetP.disconnected = false;
+      E.releasePlayerAssets(gs, targetId, "vote-kick");
       cancelReconnect(targetId);
-      delete room.votes[targetId];
+      room.votes = {};
       if (!room.spectators) room.spectators = [];
       room.spectators.push({id:targetId,name:targetP.name,reason:"votekick"});
       gs.log.push(`🚫 ${targetP.name} was vote-kicked.`);
