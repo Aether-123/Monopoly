@@ -292,7 +292,7 @@ def process_action(gs, pi, action, data):
     match action:
         case "roll":            do_roll(gs, pi)
         case "buy":             do_buy(gs, pi)
-        case "pass":            gs["phase"] = "action"
+        case "pass":            do_end_turn(gs, pi)
         case "end_turn":        do_end_turn(gs, pi)
         case "build":           do_build(gs, pi, data)
         case "sell_house":      do_sell_house(gs, pi, data)
@@ -652,6 +652,9 @@ def do_buy(gs, idx):
 
 def do_end_turn(gs, idx):
     p=gs["players"][idx]; last=gs.get("lastRoll") or []
+    if gs.get("phase") == "buy":
+        gs["log"].append(f"⚠️ {p['name']} must buy or auction this property.")
+        return
     if len(last)==2 and last[0]==last[1] and not p["inJail"] and not p["badDebt"]:
         gs["phase"]="roll"; gs["log"].append(f"{p['name']} rolled doubles — roll again!")
     else: next_turn(gs)

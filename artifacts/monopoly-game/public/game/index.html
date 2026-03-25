@@ -31,11 +31,10 @@
   <div class="land-cards">
     <div class="lcard">
       <span class="ico">🏠</span><h3>Create Room</h3>
-      <p>Design your board, invite friends</p>
+      <p>Create a game and invite friends</p>
       <input class="inp" id="cr-name" placeholder="Your name" maxlength="20">
       <div style="display:flex;gap:.4rem;flex-wrap:wrap">
         <button class="btn btn-acc" style="flex:1" onclick="goBoardSelect()">Board → Create</button>
-        <button class="btn btn-out" style="flex:1" onclick="event.stopPropagation();openEditorFromCreate()">🎨 Custom</button>
       </div>
     </div>
     <div class="lcard">
@@ -54,33 +53,6 @@
         <button class="btn btn-out" style="flex:1" onclick="browseRooms()">🔍 Browse</button>
       </div>
     </div>
-    <div class="lcard lcard-editor" onclick="openEditor()">
-      <span class="ico">🗺️</span><h3>Map Editor</h3>
-      <p>Build custom boards with drag & drop</p>
-      <button class="btn btn-out" onclick="event.stopPropagation();openEditor()">Open Editor</button>
-    </div>
-  </div>
-</div>
-
-<!-- AVATAR -->
-<div id="sc-avatar" class="screen">
-  <h2 class="screen-title">🧑 Choose Your Character</h2>
-  <div class="avatar-layout">
-    <div class="avatar-preview-col">
-      <canvas id="avatar-preview" width="120" height="120"></canvas>
-      <div class="av-preview-label">Preview</div>
-    </div>
-    <div class="avatar-options-col">
-      <div class="av-section"><div class="av-label">Skin Tone</div><div class="av-row" id="av-skin"></div></div>
-      <div class="av-section"><div class="av-label">Hair Style</div><div class="av-row" id="av-hair"></div></div>
-      <div class="av-section"><div class="av-label">Hair Colour</div><div class="av-row" id="av-haircolor"></div></div>
-      <div class="av-section"><div class="av-label">Beard / Moustache</div><div class="av-row" id="av-beard"></div></div>
-      <div class="av-section"><div class="av-label">Eye Style</div><div class="av-row" id="av-eyes"></div></div>
-    </div>
-  </div>
-  <div style="display:flex;gap:.5rem;margin-top:1rem">
-    <button class="btn btn-acc" onclick="confirmAvatar()">✅ Confirm</button>
-    <button class="btn btn-out" onclick="ss(avatarReturnScreen)">← Back</button>
   </div>
 </div>
 
@@ -91,10 +63,9 @@
     <button type="button" class="bttab on"  onclick="setBoardType('standard',this)">🌍 Standard</button>
     <button type="button" class="bttab"     onclick="setBoardType('worldwide',this)">🗺️ Worldwide</button>
     <button type="button" class="bttab"     onclick="setBoardType('random',this)">🎲 Random</button>
-    <button type="button" class="bttab"     onclick="setBoardType('india',this)"><img class="tab-flag-img" src="game/flags/16x12/in.png" alt="India flag" onerror="this.remove()">India</button>
-    <button type="button" class="bttab"     onclick="setBoardType('uk',this)"><img class="tab-flag-img" src="game/flags/16x12/gb.png" alt="UK flag" onerror="this.remove()">UK</button>
-    <button type="button" class="bttab"     onclick="setBoardType('usa',this)"><img class="tab-flag-img" src="game/flags/16x12/us.png" alt="USA flag" onerror="this.remove()">USA</button>
-    <button type="button" class="bttab" style="border-color:var(--accent)66" onclick="openEditor()">🎨 Custom Editor</button>
+    <button type="button" class="bttab"     onclick="setBoardType('india',this)">India</button>
+    <button type="button" class="bttab"     onclick="setBoardType('uk',this)">UK</button>
+    <button type="button" class="bttab"     onclick="setBoardType('usa',this)">USA</button>
   </div>
   <div class="boards-layout">
     <div class="board-panel">
@@ -104,7 +75,6 @@
         <button class="szb" onclick="setSize(7,this)">7<small>32t</small></button>
         <button class="szb" onclick="setSize(8,this)">8<small>36t</small></button>
         <button class="szb on" onclick="setSize(9,this)">9<small>40t</small></button>
-        <button class="szb" onclick="setSize(10,this)">10<small>44t</small></button>
       </div>
       <div class="option-label">Board Preview</div>
       <div class="preview-mini preview-board" id="board-size-preview"><span>Loading preview…</span></div>
@@ -113,7 +83,7 @@
         <div class="rmode-btns">
           <button class="rmode-btn on" onclick="setRMode('balanced',this)">⚖️ Balanced</button>
           <button class="rmode-btn" onclick="setRMode('chaos',this)">🔥 Chaos</button>
-          <button class="rmode-btn" onclick="setRMode('same_country',this)">🏳️ Same Country</button>
+          <button class="rmode-btn" onclick="setRMode('same_country',this)">Same Country</button>
         </div>
         <div style="display:flex;gap:.4rem;margin-top:.5rem">
           <input class="inp" id="seed-inp" placeholder="Seed e.g. A3F92B" maxlength="6" style="text-transform:uppercase;flex:1">
@@ -152,7 +122,7 @@
 </div>
 
 <!-- MAP EDITOR -->
-<div id="sc-editor" class="screen editor-screen">
+<div id="sc-editor" class="screen editor-screen" style="display:none">
   <div class="editor-header">
     <div class="editor-title">🗺️ Map Editor</div>
     <div class="editor-header-center">
@@ -202,7 +172,7 @@
       </div>
       <div class="ed-section">
         <div class="ed-section-title">BOARD SIZE</div>
-        <input type="range" id="ed-size" min="9" max="10" value="9" oninput="editorSetSize(+this.value)" class="ed-slider">
+        <input type="range" id="ed-size" min="9" max="9" value="9" oninput="editorSetSize(+this.value)" class="ed-slider">
         <div class="ed-size-info"><span id="ed-size-val" class="ed-size-badge">40 Tiles</span></div>
         <div class="ed-hint" id="ed-size-hint">Edge country distribution + edge utilities</div>
         <div class="ed-hint" style="color:var(--accent);font-size:.7rem;margin-top:.3rem" id="ed-enhancement-hint"></div>
@@ -331,6 +301,7 @@
     <button class="btn btn-out" id="rules-btn" onclick="openSetup()">⚙️ Rules</button>
     <button class="btn btn-acc" id="start-btn" onclick="startGame()" style="display:none">▶ Start Game</button>
   </div>
+  <div id="lobby-start-min-note" style="font-size:.74rem;color:var(--text-dim);text-align:center;margin-top:.35rem"></div>
   <div class="lbox" style="width:100%;max-width:500px">
     <h3>Chat</h3>
     <div id="lobby-chat-log" style="max-height:100px;overflow-y:auto;margin-bottom:.4rem"></div>
@@ -363,39 +334,39 @@
       <div class="board-wrap" id="board-wrap">
         <div class="board" id="game-board"></div>
         <div class="board-wm">MONOPSONY</div>
-      </div>
-      <div id="board-action-log" class="board-action-log"></div>
-      <div id="action-bar">
-        <div id="turn-box" class="turn-box">Loading…</div>
-        <div id="ablist" class="ablist"></div>
-      </div>
-      <div class="dice-over dh" id="dice-over" onclick="rollDice()">
-        <div class="dice-row">
-          <div class="dice-wrapper">
-            <div class="dice" id="die1" data-face="1">
-              <div class="face front"></div>
-              <div class="face back"></div>
-              <div class="face right"></div>
-              <div class="face left"></div>
-              <div class="face top"></div>
-              <div class="face bottom"></div>
-            </div>
-          </div>
+        <div id="action-bar">
+          <div class="dice-over" id="dice-over" onclick="rollDice()">
+            <div class="dice-row">
+              <div class="dice-wrapper">
+                <div class="dice" id="die1" data-face="1">
+                  <div class="face front"></div>
+                  <div class="face back"></div>
+                  <div class="face right"></div>
+                  <div class="face left"></div>
+                  <div class="face top"></div>
+                  <div class="face bottom"></div>
+                </div>
+              </div>
 
-          <div class="dice-wrapper">
-            <div class="dice" id="die2" data-face="1">
-              <div class="face front"></div>
-              <div class="face back"></div>
-              <div class="face right"></div>
-              <div class="face left"></div>
-              <div class="face top"></div>
-              <div class="face bottom"></div>
+              <div class="dice-wrapper">
+                <div class="dice" id="die2" data-face="1">
+                  <div class="face front"></div>
+                  <div class="face back"></div>
+                  <div class="face right"></div>
+                  <div class="face left"></div>
+                  <div class="face top"></div>
+                  <div class="face bottom"></div>
+                </div>
+              </div>
             </div>
+            <div class="dice-hint" id="dice-hint-txt">🎲 Click to Roll!</div>
+            <div class="dice-total" id="dice-total"></div>
+            <div class="dice-doubles hidden" id="doubles-badge">🎲 Doubles!</div>
           </div>
+          <div id="turn-box" class="turn-box">Loading…</div>
+          <div id="ablist" class="ablist"></div>
+          <div id="board-action-log" class="board-action-log"></div>
         </div>
-        <div class="dice-hint" id="dice-hint-txt">🎲 Click to Roll!</div>
-        <div class="dice-total" id="dice-total"></div>
-        <div class="dice-doubles hidden" id="doubles-badge">🎲 Doubles!</div>
       </div>
     </div>
   </div>
@@ -463,6 +434,10 @@
   </div>
 </div>
 
+<script src="flags.js"></script>
+<script src="board.js"></script>
+<script src="worldwide.js"></script>
+<script src="random.js"></script>
 <script src="game.js"></script>
 </body>
 </html>

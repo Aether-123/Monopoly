@@ -54,3 +54,6 @@ __pycache__/
 
 # Local asset archive
 16x12.zip
+
+# Temporary generated flag assets
+_tmp_svg/
