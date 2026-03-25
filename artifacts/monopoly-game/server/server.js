@@ -262,6 +262,58 @@ function applyEdgeCountrySetRule(spaces, opts = {}) {
     });
   });
 
+  // Global rebalance: ensure no country appears once and no country exceeds 3 properties.
+  const allPropertyTiles = countryProps.slice().sort((a, b) => Number(a.pos) - Number(b.pos));
+  const recalcGlobal = () => {
+    const m = new Map();
+    allPropertyTiles.forEach(sp => {
+      const code = String(assignedCodeByPos.get(sp.pos) || "");
+      if (!code) return;
+      m.set(code, (m.get(code) || 0) + 1);
+    });
+    return m;
+  };
+
+  let guard = 0;
+  while (guard++ < 200) {
+    const gCounts = recalcGlobal();
+    const singletons = [...gCounts.entries()].filter(([, cnt]) => cnt === 1).map(([code]) => code);
+    const underfilled = [...gCounts.entries()].filter(([, cnt]) => cnt === 2).map(([code]) => code);
+    const overfilled = [...gCounts.entries()].filter(([, cnt]) => cnt > 3).map(([code]) => code);
+    const emptyCodes = allCodes.filter(code => !gCounts.has(code));
+
+    if (!singletons.length && !overfilled.length) break;
+
+    // Fix singleton countries by converting that tile to a country that currently has 2
+    // (or an unused country as fallback).
+    for (const single of singletons) {
+      const donorTile = allPropertyTiles.find(sp => String(assignedCodeByPos.get(sp.pos) || "") === single);
+      if (!donorTile) continue;
+      const targetCode = underfilled.find(code => code !== single)
+        || emptyCodes[0]
+        || [...gCounts.entries()].find(([code, cnt]) => code !== single && cnt < 3)?.[0];
+      if (!targetCode) continue;
+      assignedCodeByPos.set(donorTile.pos, targetCode);
+    }
+
+    // Clamp countries >3 by moving surplus tiles to underfilled/unused countries.
+    const gCounts2 = recalcGlobal();
+    const receivers = [
+      ...[...gCounts2.entries()].filter(([, cnt]) => cnt < 2).map(([code]) => code),
+      ...allCodes.filter(code => !gCounts2.has(code)),
+      ...[...gCounts2.entries()].filter(([, cnt]) => cnt === 2).map(([code]) => code),
+    ];
+
+    for (const code of overfilled) {
+      const tiles = allPropertyTiles.filter(sp => String(assignedCodeByPos.get(sp.pos) || "") === code);
+      for (let i = 3; i < tiles.length; i++) {
+        const receiver = receivers.find(rc => rc !== code && (recalcGlobal().get(rc) || 0) < 3);
+        if (!receiver) break;
+        assignedCodeByPos.set(tiles[i].pos, receiver);
+      }
+    }
+  }
+
   const cityStartByCode = new Map();
   countryProps.forEach((sp) => {
     const code = assignedCodeByPos.get(sp.pos);
@@ -805,6 +857,103 @@ function enforceRequestedUtilityAndTopSet(spaces) {
   return board;
 }
 
+function enforceRandomCountrySetConstraints(spaces, opts = {}) {
+  if (!Array.isArray(spaces) || !spaces.length) return spaces;
+  const seedSalt = String(opts?.seedSalt || "");
+  const board = spaces.map((sp, idx) => ({ ...(sp || {}), pos: Number(sp?.pos ?? idx) }));
+  const props = board.filter(sp => sp?.type === "property");
+  if (!props.length) return board;
+
+  const catalog = new Map(E.getCountriesList().map(c => [String(c.code || "").toLowerCase(), c]));
+  const allCodes = [...catalog.keys()];
+  if (!allCodes.length) return board;
+
+  const codeByPos = new Map();
+  for (const sp of props) {
+    const code = String(sp.countryCode || "").toLowerCase();
+    if (code && catalog.has(code)) codeByPos.set(sp.pos, code);
+  }
+
+  const counts = () => {
+    const m = new Map();
+    props.forEach(sp => {
+      const code = codeByPos.get(sp.pos);
+      if (!code) return;
+      m.set(code, (m.get(code) || 0) + 1);
+    });
+    return m;
+  };
+
+  const hashStr = (str) => {
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 16777619) >>> 0;
+    }
+    return h >>> 0;
+  };
+
+  let guard = 0;
+  while (guard++ < 250) {
+    const m = counts();
+    const over = [...m.entries()].filter(([, n]) => n > 3).map(([code]) => code);
+    const singles = [...m.entries()].filter(([, n]) => n === 1).map(([code]) => code);
+    if (!over.length && !singles.length) break;
+
+    const takeReceiver = (avoid = "") => {
+      const now = counts();
+      const candidates = [
+        ...[...now.entries()].filter(([c, n]) => c !== avoid && n === 2).map(([c]) => c),
+        ...allCodes.filter(c => c !== avoid && !now.has(c)),
+        ...[...now.entries()].filter(([c, n]) => c !== avoid && n < 2).map(([c]) => c),
+        ...[...now.entries()].filter(([c, n]) => c !== avoid && n < 3).map(([c]) => c),
+      ];
+      return candidates.length ? candidates[0] : "";
+    };
+
+    for (const code of over) {
+      const tiles = props.filter(sp => codeByPos.get(sp.pos) === code).sort((a, b) => a.pos - b.pos);
+      for (let i = 3; i < tiles.length; i++) {
+        const receiver = takeReceiver(code);
+        if (!receiver) break;
+        codeByPos.set(tiles[i].pos, receiver);
+      }
+    }
+
+    for (const code of singles) {
+      const tile = props.find(sp => codeByPos.get(sp.pos) === code);
+      if (!tile) continue;
+      const receiver = takeReceiver(code);
+      if (!receiver) continue;
+      codeByPos.set(tile.pos, receiver);
+    }
+  }
+
+  const cityCursorByCode = new Map();
+  const cityStartByCode = new Map();
+  props.sort((a, b) => a.pos - b.pos).forEach(sp => {
+    const code = codeByPos.get(sp.pos);
+    if (!code || !catalog.has(code)) return;
+    const meta = catalog.get(code);
+    sp.countryCode = code;
+    sp.countryName = meta?.name || sp.countryName || "";
+    sp.countryFlag = meta?.flag || sp.countryFlag || "";
+
+    if (Array.isArray(meta?.cities) && meta.cities.length) {
+      if (!cityStartByCode.has(code)) {
+        const offset = seedSalt ? (hashStr(`${seedSalt}|${code}|final`) % meta.cities.length) : 0;
+        cityStartByCode.set(code, offset);
+      }
+      const cursor = cityCursorByCode.get(code) || 0;
+      const offset = cityStartByCode.get(code) || 0;
+      sp.name = meta.cities[(offset + cursor) % meta.cities.length] || sp.name;
+      cityCursorByCode.set(code, cursor + 1);
+    }
+  });
+
+  return board;
+}
+
 function buildWorldwideBoard(wwCities, size, seedSalt = "") {
   const normalizePropertyPricing = (spaces) => {
     const props = spaces
@@ -942,6 +1091,7 @@ function normalizeMapConfig(mapCfg) {
     }
     cfg.spaces = enforceEastTaxGovPattern(cfg.spaces);
     cfg.spaces = enforceRequestedUtilityAndTopSet(cfg.spaces);
+    cfg.spaces = enforceRandomCountrySetConstraints(cfg.spaces, { seedSalt: cfg.seed });
     return cfg;
   }
 
@@ -1407,7 +1557,15 @@ io.on("connection", (socket) => {
     const room = roomOf(socket.id);
     if (!room || room.phase !== "lobby") return;
     if (room.hostId !== pid(socket.id)) return;
-    const cfg = normalizeMapConfig(room.mapConfig || {});
+    const cfg = { ...(room.mapConfig || {}) };
+    if (!Array.isArray(cfg.spaces) || !cfg.spaces.length) {
+      const normalized = normalizeMapConfig(room.mapConfig || {});
+      cfg.spaces = Array.isArray(normalized.spaces) ? normalized.spaces : [];
+      cfg.tilesPerSide = normalized.tilesPerSide || cfg.tilesPerSide;
+      cfg.preset = normalized.preset || cfg.preset;
+      cfg.seed = normalized.seed || cfg.seed;
+      cfg.mode = normalized.mode || cfg.mode;
+    }
     const change = {
       kind: sanitize((data || {}).kind || "", 20),
       from: sanitize((data || {}).from || "", 80),
@@ -1814,6 +1972,7 @@ app.get("/mapi/random-board", (req, res) => {
   board = enforceSingleTaxReturnTile(board);
   board = enforceEastTaxGovPattern(board);
   board = enforceRequestedUtilityAndTopSet(board);
+  board = enforceRandomCountrySetConstraints(board, { seedSalt: seed });
   res.json({seed, board, tilesPerSide: S});
 });
 
