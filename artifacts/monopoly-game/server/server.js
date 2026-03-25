@@ -9,7 +9,7 @@ import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import * as E from "./engine.js";
 
-const PORT = parseInt(process.env.GAME_PORT || "8001");
+const START_PORT = parseInt(process.env.GAME_PORT || "8011");
 const HOST = (process.env.GAME_HOST || "0.0.0.0").trim() || "0.0.0.0";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -21,6 +21,13 @@ const io = new Server(httpServer, {
   cors: { origin: "*", methods: ["GET","POST"] },
   pingTimeout: 60000,
   pingInterval: 25000,
+});
+
+app.get("/flags/:file", (req, res, next) => {
+  const file = String(req.params.file || "");
+  res.sendFile(join(GAME_PUBLIC_DIR, "flags", "svg", file), (err) => {
+    if (err) next();
+  });
 });
 
 app.use(express.static(GAME_PUBLIC_DIR));
@@ -623,9 +630,139 @@ function enforceSingleTaxReturnTile(spaces) {
   return board;
 }
 
+function enforceEastTaxGovPattern(spaces) {
+  if (!Array.isArray(spaces) || !spaces.length) return spaces;
+  const board = spaces.map(sp => ({ ...sp }));
+  const total = board.length;
+  const C = Math.floor(total / 4);
+  const S = C - 1;
+  if (C < 2 || S < 4) return board;
+
+  const scaffold = E.generateDefaultBoard(S);
+  for (let i = 0; i < board.length; i++) {
+    if (board[i]?.type !== "luxury_tax") continue;
+    const fallback = scaffold[i];
+    if (fallback?.type === "property") {
+      board[i] = { ...fallback, pos: i };
+      continue;
+    }
+    board[i] = {
+      pos: i,
+      type: "property",
+      group: "g0",
+      name: `City ${i}`,
+      countryCode: "",
+      countryFlag: "",
+      countryName: "",
+      price: 120,
+      rents: [12, 36, 72, 144, 220, 320],
+      houseCost: 60,
+      houses: 0,
+      owner: null,
+      mortgaged: false,
+    };
+  }
+
+  const eastStart = C + 1;
+  const eastEnd = (2 * C) - 1;
+  const eastSlots = Array.from({ length: S }, (_, i) => eastStart + i);
+
+  const preferredIdx = Math.max(0, Math.min(S - 4, Math.floor((2 * S) / 5)));
+  const eastTaxPos = eastSlots.find(
+    (pos) => board[pos]?.type === "tax_return" && (pos + 3) <= eastEnd,
+  );
+  const eastTaxIdx = eastTaxPos != null ? (eastTaxPos - eastStart) : -1;
+
+  const scanOrder = [];
+  if (eastTaxIdx >= 0) scanOrder.push(eastTaxIdx);
+  if (!scanOrder.includes(preferredIdx)) scanOrder.push(preferredIdx);
+  for (let i = 0; i <= S - 4; i++) {
+    if (!scanOrder.includes(i)) scanOrder.push(i);
+  }
+
+  const isCityGapCandidate = (idx) => {
+    const taxPos = eastStart + idx;
+    const cityOne = board[taxPos + 1];
+    const cityTwo = board[taxPos + 3];
+    return cityOne?.type === "property" && cityTwo?.type === "property";
+  };
+
+  let chosenIdx = scanOrder.find((idx) => isCityGapCandidate(idx));
+  if (chosenIdx == null) chosenIdx = scanOrder[0] ?? 0;
+
+  const taxPos = eastStart + chosenIdx;
+  const govPos = taxPos + 2;
+  if (taxPos < eastStart || govPos > eastEnd) return board;
+
+  board[taxPos] = { pos: taxPos, type: "tax_return", name: "$ Tax Refund" };
+  board[govPos] = { pos: govPos, type: "gov_prot", name: "🏛️ Government Protection" };
+
+  return board;
+}
+
+function buildWorldwideBoard(wwCities, size, seedSalt = "") {
+  const board = E.generateDefaultBoard(size);
+  const pools = (Array.isArray(wwCities) ? wwCities : []).map(c => ({
+    code: String(c.code || "").toLowerCase(),
+    name: c.name || "",
+    flag: c.flag || "",
+    base: Number(c.base || 60),
+    cities: Array.isArray(c.cities) ? c.cities.slice() : [],
+  })).filter(c => c.code && c.cities.length);
+  if (!pools.length) {
+    return enforceEastTaxGovPattern(E.enforceBoardLayoutConstraints(board, size));
+  }
+
+  const propByGroup = {};
+  for (const sp of board) {
+    if (sp.type === "property") {
+      const grp = sp.group || "g0";
+      if (!propByGroup[grp]) propByGroup[grp] = [];
+      propByGroup[grp].push(sp);
+    }
+  }
+
+  const cityCursorByCode = {};
+  for (let gi = 0; gi < 8; gi++) {
+    const grp = `g${gi}`;
+    const propsInGrp = propByGroup[grp] || [];
+    const pool = pools[gi % pools.length];
+    for (let ci = 0; ci < propsInGrp.length; ci++) {
+      const sp = propsInGrp[ci];
+      const cityIdx = cityCursorByCode[pool.code] || 0;
+      const city = pool.cities[cityIdx % pool.cities.length] || sp.name;
+      const price = pool.base + (ci * 10);
+      sp.name = city;
+      sp.countryCode = pool.code;
+      sp.countryFlag = pool.flag;
+      sp.countryName = pool.name;
+      sp.price = price;
+      sp.rents = [
+        Math.max(6, Math.floor(price * 0.08)),
+        Math.max(20, Math.floor(price * 0.32)),
+        Math.max(50, Math.floor(price * 0.8)),
+        Math.max(100, Math.floor(price * 1.8)),
+        Math.max(160, Math.floor(price * 2.8)),
+        Math.max(220, Math.floor(price * 3.8)),
+      ];
+      sp.houseCost = Math.max(50, Math.floor(price * 0.5));
+      cityCursorByCode[pool.code] = cityIdx + 1;
+    }
+  }
+
+  let out = E.enforceBoardLayoutConstraints(board, size);
+  out = applyEdgeCountrySetRule(out, { seedSalt });
+  out = applyFortyFourInfrastructureRule(out);
+  out = applyFortyFourWestTaxFallback(out, { seedSalt });
+  out = applyFortyFourToFortyTwoWestTrim(out);
+  out = enforceSingleTaxReturnTile(out);
+  out = enforceEastTaxGovPattern(out);
+  return out;
+}
+
 function normalizeMapConfig(mapCfg) {
   const cfg = { ...(mapCfg || {}) };
-  const size = Math.max(6, Math.min(parseInt(cfg.tilesPerSide || "9"), 10));
+  const size = Math.max(6, Math.min(parseInt(cfg.tilesPerSide || "9"), 9));
   const preset = String(cfg.preset || "").toLowerCase();
   const skipEdgeRule = DOMESTIC_PRESETS.has(preset);
   const shouldApplyEdgeRule = !skipEdgeRule && preset !== "worldwide";
@@ -641,50 +778,13 @@ function normalizeMapConfig(mapCfg) {
       cfg.spaces = swapSouthLuxuryTaxWithAdjacentCity(cfg.spaces);
       cfg.spaces = enforceSingleTaxReturnTile(cfg.spaces);
     }
+    cfg.spaces = enforceEastTaxGovPattern(cfg.spaces);
     return cfg;
   }
 
   if (cfg.preset === "worldwide" && Array.isArray(cfg.wwCities) && cfg.wwCities.length) {
-    const board = E.generateDefaultBoard(size);
-    const props = board.filter(sp => sp.type === "property");
-    const pools = cfg.wwCities.map(c => ({
-      code: String(c.code || "").toLowerCase(),
-      name: c.name || "",
-      flag: c.flag || "",
-      base: Number(c.base || 60),
-      cities: Array.isArray(c.cities) ? c.cities.slice() : [],
-    })).filter(c => c.code && c.cities.length);
-    if (pools.length) {
-      props.forEach((sp, i) => {
-        const bucket = pools[i % pools.length];
-        const city = bucket.cities[i % bucket.cities.length] || sp.name;
-        const price = bucket.base + ((i % 3) * 10);
-        sp.name = city;
-        sp.countryCode = bucket.code;
-        sp.countryFlag = bucket.flag;
-        sp.countryName = bucket.name;
-        sp.price = price;
-        sp.rents = [
-          Math.max(6, Math.floor(price * 0.08)),
-          Math.max(20, Math.floor(price * 0.32)),
-          Math.max(50, Math.floor(price * 0.8)),
-          Math.max(100, Math.floor(price * 1.8)),
-          Math.max(160, Math.floor(price * 2.8)),
-          Math.max(220, Math.floor(price * 3.8)),
-        ];
-        sp.houseCost = Math.max(50, Math.floor(price * 0.5));
-      });
-      cfg.spaces = E.enforceBoardLayoutConstraints(board, size);
-      if (shouldApplyEdgeRule) {
-        cfg.spaces = applyEdgeCountrySetRule(cfg.spaces, { seedSalt: cfg.seed || "" });
-        cfg.spaces = applyFortyFourInfrastructureRule(cfg.spaces);
-        cfg.spaces = applyFortyFourWestTaxFallback(cfg.spaces, { seedSalt: cfg.seed || "" });
-        cfg.spaces = applyFortyFourToFortyTwoWestTrim(cfg.spaces);
-        cfg.spaces = swapSouthLuxuryTaxWithAdjacentCity(cfg.spaces);
-        cfg.spaces = enforceSingleTaxReturnTile(cfg.spaces);
-      }
-      return cfg;
-    }
+    cfg.spaces = buildWorldwideBoard(cfg.wwCities, size, cfg.seed || "");
+    return cfg;
   }
 
   if (cfg.preset === "india" || cfg.preset === "uk" || cfg.preset === "usa") {
@@ -696,6 +796,7 @@ function normalizeMapConfig(mapCfg) {
     cfg.spaces = applyFortyFourToFortyTwoWestTrim(cfg.spaces);
     cfg.spaces = swapSouthLuxuryTaxWithAdjacentCity(cfg.spaces);
     cfg.spaces = enforceSingleTaxReturnTile(cfg.spaces);
+    cfg.spaces = enforceEastTaxGovPattern(cfg.spaces);
     return cfg;
   }
 
@@ -709,6 +810,7 @@ function normalizeMapConfig(mapCfg) {
       cfg.spaces = swapSouthLuxuryTaxWithAdjacentCity(cfg.spaces);
       cfg.spaces = enforceSingleTaxReturnTile(cfg.spaces);
     }
+    cfg.spaces = enforceEastTaxGovPattern(cfg.spaces);
     return cfg;
   }
 
@@ -721,6 +823,7 @@ function normalizeMapConfig(mapCfg) {
     cfg.spaces = swapSouthLuxuryTaxWithAdjacentCity(cfg.spaces);
     cfg.spaces = enforceSingleTaxReturnTile(cfg.spaces);
   }
+  cfg.spaces = enforceEastTaxGovPattern(cfg.spaces);
   return cfg;
 }
 
@@ -939,8 +1042,34 @@ io.on("connection", (socket) => {
     const code  = sanitize(data.roomId || "", 6).toUpperCase();
     const name  = sanitize(data.playerName || "", 20) || "Player";
     const avatar = data.avatar || null;
+    const playerIdForReconnect = sanitize(data.playerId || "", 64);
     const room = rooms.get(code);
     if (!room) { socket.emit("join_error", {message:"Room not found."}); return; }
+    
+    // Check if this is a reconnect attempt during active game within grace period
+    if (room.phase !== "lobby" && playerIdForReconnect) {
+      const gs = room.gameState;
+      if (gs) {
+        const gp = findGp(gs, playerIdForReconnect);
+        if (gp && gp.disconnected && gp.reconnectDeadline && gp.reconnectDeadline > Date.now()/1000) {
+          // This is a valid reconnect; route to reconnect handler
+          const oldSid = playerSid.get(playerIdForReconnect);
+          if (oldSid && oldSid !== socket.id) {
+            sidRoom.delete(oldSid); sidPlayer.delete(oldSid);
+          }
+          sidRoom.set(socket.id, code); sidPlayer.set(socket.id, playerIdForReconnect); playerSid.set(playerIdForReconnect, socket.id);
+          socket.join(code); cancelReconnect(playerIdForReconnect);
+          gp.disconnected = false; gp.reconnectDeadline = null; gp.sid = socket.id;
+          gs.log.push(`✅ ${gp.name} reconnected!`);
+          socket.emit("game_started", {gameState:gs});
+          io.to(code).emit("state_update", {gameState:gs});
+          io.to(code).emit("player_reconnected", {playerId:playerIdForReconnect,name:gp.name});
+          return;
+        }
+      }
+    }
+    
+    // Not a reconnect or not within grace period; check for new join
     if (room.phase !== "lobby") { addSpectator(socket, room, name, avatar); return; }
     if (room.players.length >= room.settings.maxPlayers) { socket.emit("join_error", {message:"Room is full."}); return; }
     const idx = room.players.length;
@@ -1062,6 +1191,12 @@ io.on("connection", (socket) => {
   socket.on("start_game", () => {
     const room = roomOf(socket.id);
     if (!room || room.hostId !== pid(socket.id)) return;
+    const lobbyActivePlayers = room.players.filter(p => !p.isSpectator && !p.disconnected).length;
+    if (lobbyActivePlayers < 2) {
+      socket.emit("start_error", { message: "At least 2 players are required to start the game." });
+      io.to(room.id).emit("lobby_update", lobbyPayload(room));
+      return;
+    }
     room.phase = "playing";
     room.gameState = E.initGame(room);
     io.to(room.id).emit("game_started", {gameState:room.gameState});
@@ -1232,9 +1367,18 @@ app.get("/mapi/rooms", (_req, res) => {
 app.get("/mapi/countries", (_req, res) => res.json(E.getCountriesList()));
 app.get("/mapi/domestic-maps", (_req, res) => res.json(E.getDomesticMaps()));
 
+app.use(express.json({ limit: "1mb" }));
+
+app.post("/mapi/worldwide-board", (req, res) => {
+  const S = Math.max(6, Math.min(parseInt(req.body?.S || "9"), 9));
+  const wwCities = Array.isArray(req.body?.wwCities) ? req.body.wwCities : [];
+  const board = buildWorldwideBoard(wwCities, S);
+  res.json({ board, tilesPerSide: S });
+});
+
 app.get("/mapi/domestic-board", (req, res) => {
   const preset = (req.query.preset || "india").toString();
-  const S = Math.max(6, Math.min(parseInt(req.query.S || "9"), 10));
+  const S = Math.max(6, Math.min(parseInt(req.query.S || "9"), 9));
   let board = E.generateDomesticBoard(preset, S);
   board = E.enforceBoardLayoutConstraints(board, S);
   board = applyEdgeCountrySetRule(board);
@@ -1243,12 +1387,13 @@ app.get("/mapi/domestic-board", (req, res) => {
   board = applyFortyFourToFortyTwoWestTrim(board);
   board = swapSouthLuxuryTaxWithAdjacentCity(board);
   board = enforceSingleTaxReturnTile(board);
+  board = enforceEastTaxGovPattern(board);
   res.json({preset, board, tilesPerSide: S});
 });
 
 app.get("/mapi/random-board", (req, res) => {
   const mode = (req.query.mode || "balanced").toString();
-  const S    = Math.max(6, Math.min(parseInt(req.query.S || "9"), 10));
+  const S    = Math.max(6, Math.min(parseInt(req.query.S || "9"), 9));
   const seed = (req.query.seed || "").toString().toUpperCase() ||
     Array.from({length:6}, () => "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"[Math.floor(Math.random()*32)]).join("");
   let board = E.enforceBoardLayoutConstraints(E.generateRandomBoard(seed, mode, S), S);
@@ -1258,11 +1403,12 @@ app.get("/mapi/random-board", (req, res) => {
   board = applyFortyFourToFortyTwoWestTrim(board);
   board = swapSouthLuxuryTaxWithAdjacentCity(board);
   board = enforceSingleTaxReturnTile(board);
+  board = enforceEastTaxGovPattern(board);
   res.json({seed, board, tilesPerSide: S});
 });
 
 app.get("/mapi/default-board", (req, res) => {
-  const S = Math.max(6, Math.min(parseInt(req.query.S || "9"), 10));
+  const S = Math.max(6, Math.min(parseInt(req.query.S || "9"), 9));
   let board = E.enforceBoardLayoutConstraints(E.generateDefaultBoard(S), S);
   board = applyEdgeCountrySetRule(board);
   board = applyFortyFourInfrastructureRule(board);
@@ -1270,6 +1416,7 @@ app.get("/mapi/default-board", (req, res) => {
   board = applyFortyFourToFortyTwoWestTrim(board);
   board = swapSouthLuxuryTaxWithAdjacentCity(board);
   board = enforceSingleTaxReturnTile(board);
+  board = enforceEastTaxGovPattern(board);
   res.json({board, tilesPerSide: S});
 });
 
@@ -1284,6 +1431,25 @@ setInterval(() => {
 }, 3_600_000);
 
 // ─── Start ────────────────────────────────────────────
-httpServer.listen(PORT, HOST, () => {
-  console.log(`🎲  Monopsony :- A Monopoly Alternative v3.1  →  http://${HOST}:${PORT}`);
+let currentPort = START_PORT;
+let retryCount = 0;
+const MAX_PORT_RETRIES = 20;
+
+function startServer() {
+  httpServer.listen(currentPort, HOST, () => {
+    console.log(`🎲  Monopsony :- A Monopoly Alternative v3.1  →  http://${HOST}:${currentPort}`);
+  });
+}
+
+httpServer.on("error", (err) => {
+  if (err?.code === "EADDRINUSE" && retryCount < MAX_PORT_RETRIES) {
+    retryCount += 1;
+    currentPort += 1;
+    console.log(`⚠️ Port in use. Retrying on ${currentPort}...`);
+    setTimeout(startServer, 100);
+    return;
+  }
+  throw err;
 });
+
+startServer();

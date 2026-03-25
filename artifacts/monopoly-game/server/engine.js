@@ -2,7 +2,7 @@
  * Monopoly Online — engine.js v3.1
  * Pure game logic. No I/O. Called by server.js.
  */
-import { randomUUID } from "crypto";
+import { randomUUID, randomInt } from "crypto";
 
 // ════════════════════════════════════════════════
 //  CARD DECKS
@@ -85,9 +85,9 @@ const HAZARDS = [
   {id:"accident", name:"Accident",     icon:"🏥",  desc:"Hospital bill!",            type:"money",  amount:100},
   {id:"robbery",  name:"Robbery!",     icon:"🔫",  desc:"Your wallet is stolen!",    type:"robbery"},
   {id:"quake",    name:"Earthquake!",  icon:"🌍💥",desc:"Houses demolished!",        type:"disaster"},
-  {id:"cyclone",  name:"Cyclone!",     icon:"🌀",  desc:"Storm destroys buildings.", type:"disaster"},
+  {id:"cyclone",  name:"Cyclone!",     icon:"🌀",  desc:"Cyclone in city, $300 lost for relief efforts.", type:"money", amount:300},
   {id:"tsunami",  name:"Tsunami!",     icon:"🌊",  desc:"Property flooded.",         type:"disaster",fixed:1},
-  {id:"landslide",name:"Landslide!",   icon:"⛰️💥",desc:"2 houses demolished.",     type:"disaster",fixed:2},
+  {id:"landslide",name:"Landslide!",   icon:"⛰️💥",desc:"Landslide in city, 1 house demolished.", type:"disaster",fixed:1},
   {id:"fine",     name:"Gov. Fine",    icon:"📋",  desc:"Pay $75 penalty.",          type:"money",  amount:75},
   {id:"fire",     name:"Fire!",        icon:"🔥",  desc:"All houses on one property lost.",type:"fire"},
 ];
@@ -186,10 +186,78 @@ export function defaultSettings() {
   };
 }
 
+function enforceEastTaxGovPattern(board) {
+  if (!Array.isArray(board) || !board.length) return board;
+  const out = board.map((sp, idx) => ({ ...(sp || {}), pos: idx }));
+  const total = out.length;
+  const C = Math.floor(total / 4);
+  const S = C - 1;
+  if (C < 2 || S < 4) return out;
+
+  const scaffold = generateDefaultBoard(S);
+  for (let i = 0; i < out.length; i++) {
+    if (out[i]?.type !== "luxury_tax") continue;
+    const fallback = scaffold[i];
+    if (fallback?.type === "property") {
+      out[i] = { ...fallback, pos: i };
+      continue;
+    }
+    out[i] = {
+      pos: i,
+      type: "property",
+      group: "g0",
+      name: `City ${i}`,
+      countryCode: "",
+      countryFlag: "",
+      countryName: "",
+      price: 120,
+      rents: [12, 36, 72, 144, 220, 320],
+      houseCost: 60,
+      houses: 0,
+      owner: null,
+      mortgaged: false,
+    };
+  }
+
+  const eastStart = C + 1;
+  const eastEnd = (2 * C) - 1;
+  const eastSlots = Array.from({ length: S }, (_, i) => eastStart + i);
+
+  const preferredIdx = Math.max(0, Math.min(S - 4, Math.floor((2 * S) / 5)));
+  const eastTaxPos = eastSlots.find((pos) => out[pos]?.type === "tax_return" && (pos + 3) <= eastEnd);
+  const eastTaxIdx = eastTaxPos != null ? (eastTaxPos - eastStart) : -1;
+
+  const scanOrder = [];
+  if (eastTaxIdx >= 0) scanOrder.push(eastTaxIdx);
+  if (!scanOrder.includes(preferredIdx)) scanOrder.push(preferredIdx);
+  for (let i = 0; i <= S - 4; i++) {
+    if (!scanOrder.includes(i)) scanOrder.push(i);
+  }
+
+  const isCityGapCandidate = (idx) => {
+    const taxPos = eastStart + idx;
+    const cityOne = out[taxPos + 1];
+    const cityTwo = out[taxPos + 3];
+    return cityOne?.type === "property" && cityTwo?.type === "property";
+  };
+
+  let chosenIdx = scanOrder.find((idx) => isCityGapCandidate(idx));
+  if (chosenIdx == null) chosenIdx = scanOrder[0] ?? 0;
+
+  const taxPos = eastStart + chosenIdx;
+  const govPos = taxPos + 2;
+  if (taxPos < eastStart || govPos > eastEnd) return out;
+
+  out[taxPos] = { pos: taxPos, type: "tax_return", name: "$ Tax Refund" };
+  out[govPos] = { pos: govPos, type: "gov_prot", name: "🏛️ Government Protection" };
+
+  return out;
+}
+
 // ════════════════════════════════════════════════
 //  RANDOM HELPERS
 // ════════════════════════════════════════════════
-function rnd6() { return Math.floor(Math.random() * 6) + 1; }
+function rnd6() { return randomInt(1, 7); }
 function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 function shuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
@@ -223,22 +291,33 @@ function makeRng(seedStr) {
 export function initGame(room) {
   const S = (room.mapConfig || {}).tilesPerSide || 9;
   const rawBoard = (room.mapConfig || {}).spaces || generateDefaultBoard(S);
-  const board = Array.isArray(rawBoard) && rawBoard.length >= 24
+  const baseBoard = Array.isArray(rawBoard) && rawBoard.length >= 24
     ? rawBoard.map((sp, idx) => ({ ...(sp || {}), pos: idx }))
     : enforceBoardLayoutConstraints(rawBoard, S);
+  const board = enforceEastTaxGovPattern(baseBoard);
   const players = room.players.map(p => mkGamePlayer(p, room.settings));
   const startPos = board.find(s => s.type === "go")?.pos ?? 0;
   players.forEach(pl => { pl.position = startPos; });
-  const propPositions = board.filter(s => s.type === "property").map(s => s.pos);
-  const taxReturnPool = sample(propPositions, Math.min(6, propPositions.length));
-  const remaining = propPositions.filter(p => !taxReturnPool.includes(p));
+  const purchasableTypes = new Set(["property", "utility", "airport", "railway"]);
+  const specialPositions = board
+    .filter((s) => !purchasableTypes.has(s.type))
+    .map((s) => s.pos);
+  const explicitTaxReturnPositions = board
+    .filter((s) => s.type === "tax_return")
+    .map((s) => s.pos);
+  const taxReturnCandidates = explicitTaxReturnPositions.length
+    ? explicitTaxReturnPositions
+    : specialPositions.filter((p) => board[p]?.type !== "gov_prot");
+  const taxReturnPool = sample(taxReturnCandidates, Math.min(6, taxReturnCandidates.length));
+  const remaining = specialPositions.filter(
+    (p) => !taxReturnPool.includes(p) && board[p]?.type !== "gov_prot",
+  );
   const rndTaxPool = sample(remaining, Math.min(8, remaining.length));
   
-  // Build hazard pool from chance/chest tiles; if none exist, use a sample of properties
+  // Build hazard pool from chance/chest tiles; if none exist, use non-purchasable specials
   let hazardPool = board.filter(s => s.type === "chance" || s.type === "chest").map(s => s.pos);
-  if (hazardPool.length === 0 && propPositions.length > 0) {
-    // Fallback: sample 4-8 properties as hazard zones if no chance/chest tiles exist
-    hazardPool = sample(propPositions, Math.min(Math.max(4, Math.floor(propPositions.length / 4)), 8));
+  if (hazardPool.length === 0 && remaining.length > 0) {
+    hazardPool = sample(remaining, Math.min(Math.max(4, Math.floor(remaining.length / 4)), 8));
   }
   if (hazardPool.length === 0) {
     // Last resort: use board positions 5, 10, 15, 20 if available
@@ -481,10 +560,10 @@ function movePlayer(gs, idx, steps) {
 function landOn(gs, idx) {
   const p = gs.players[idx]; const sp = gs.board[p.position]; const pos = p.position;
   gs.log.push(`📍 ${p.name} → ${sp.name}`);
-  if (pos === gs.hazardPos)    { applyHazard(gs, idx); return; }
-  if (pos === gs.taxReturnPos) { landTaxReturn(gs, idx); gs.phase = "action"; return; }
-  if (pos === gs.randomTaxPos) { landRandomTax(gs, idx); return; }
   const t = sp.type; const s = gs.settings;
+  
+  // Check tile type first for purchasable tiles and special tile types
+  // This prevents position-based effects from overriding tile type logic
   if (t === "tax_return") { landTaxReturn(gs, idx); gs.phase = "action"; return; }
   if (t === "go") {
     const bonusPct = Number(gs.settings.startTileBonusPercent || 0);
@@ -531,6 +610,10 @@ function landOn(gs, idx) {
     if (!sp.owner) gs.phase = "buy";
     else { payRailwayFee(gs, idx, sp); gs.phase = "rail_travel"; }
   }
+  // Handle position-based special effects only if not already handled above
+  else if (pos === gs.hazardPos)    { applyHazard(gs, idx); return; }
+  else if (pos === gs.taxReturnPos) { landTaxReturn(gs, idx); gs.phase = "action"; return; }
+  else if (pos === gs.randomTaxPos) { landRandomTax(gs, idx); return; }
   else gs.phase = "action";
 }
 
@@ -650,9 +733,28 @@ function landRandomTax(gs, idx) {
 }
 
 function applyHazard(gs, idx) {
-  const p = gs.players[idx]; const haz = pick(HAZARDS);
+  const p = gs.players[idx]; const haz = { ...pick(HAZARDS) };
   let lostMoney = 0, lostHouses = 0, lostRebuild = 0;
-  if (haz.type === "money") { lostMoney = Math.min(haz.amount, p.money); p.money -= lostMoney; }
+  const ownedProps = p.properties.map(pos => gs.board[pos]).filter(sp => sp?.type === "property");
+  if (haz.id === "cyclone") {
+    const target = ownedProps.length ? pick(ownedProps) : null;
+    if (target?.name) haz.desc = `Cyclone in "${target.name}", $300 lost for relief efforts.`;
+    lostMoney = Math.min(300, p.money);
+    p.money -= lostMoney;
+  }
+  else if (haz.id === "landslide") {
+    const developed = ownedProps.filter(sp => (sp.houses || 0) > 0);
+    const target = developed.length ? pick(developed) : null;
+    if (target) {
+      target.houses = Math.max(0, (target.houses || 0) - 1);
+      lostHouses = 1;
+      lostRebuild = target.houseCost || 0;
+      haz.desc = `Landslide in "${target.name}", 1 house demolished.`;
+    } else {
+      haz.desc = "Landslide warning issued, but no developed city was affected.";
+    }
+  }
+  else if (haz.type === "money") { lostMoney = Math.min(haz.amount, p.money); p.money -= lostMoney; }
   else if (haz.type === "robbery") { lostMoney = p.money; p.money = 0; }
   else if (haz.type === "disaster" || haz.type === "fire") {
     const owned = p.properties.map(pos => gs.board[pos]).filter(sp => (sp.houses || 0) > 0);
@@ -677,22 +779,31 @@ function applyHazard(gs, idx) {
 
 function landGovProt(gs, idx) {
   const p = gs.players[idx]; const s = gs.settings; const cur = s.currency; let msg = "";
+  let debtCleared = 0;
+  let hazardCompensation = 0;
+  let cashGrant = 0;
   if (p.badDebt && p.govProtCards > 0) {
-    p.govProtCards--; Object.assign(p, {badDebt:false,badDebtTurns:0,inJail:false});
+    debtCleared = Number(p.badDebtAmount || 0);
+    p.govProtCards--; Object.assign(p, {badDebt:false,badDebtTurns:0,inJail:false,jailTurns:0,badDebtAmount:0});
     earnMoney(gs, idx, s.govBailoutAmount, "Gov bailout");
+    cashGrant = s.govBailoutAmount;
     msg = `🏛️ ${p.name} BAILED OUT! Gets ${cur}${s.govBailoutAmount}`;
   } else if ((p.pendingHazardLoss || 0) > 0 || (p.pendingHazardRebuildCost || 0) > 0) {
     const mc = p.pendingHazardLoss || 0; const rc = p.pendingHazardRebuildCost || 0; const tc = mc + rc;
     earnMoney(gs, idx, tc, "Gov hazard compensation");
     Object.assign(p, {pendingHazardLoss:0,pendingHazardHouses:0,pendingHazardRebuildCost:0});
+    hazardCompensation = tc;
     msg = `🏛️ Government compensates ${p.name} ${cur}${tc}!`;
   } else if (p.money < 100) {
     earnMoney(gs, idx, s.govGrantAmount, "Gov grant");
+    cashGrant = s.govGrantAmount;
     msg = `🏛️ ${p.name} gets grant: ${cur}${s.govGrantAmount}`;
   } else {
     msg = `🏛️ ${p.name} on Gov. Protection — all good!`;
   }
-  gs.log.push(msg); gs.pendingEvent = {type:"gov_prot",message:msg}; gs.phase = "gov_prot_event";
+  gs.log.push(msg);
+  gs.pendingEvent = {type:"gov_prot",message:msg,debtCleared,hazardCompensation,cashGrant};
+  gs.phase = "gov_prot_event";
 }
 
 function drawSurprise(gs, idx) {
@@ -779,6 +890,10 @@ function doBuy(gs, idx) {
 
 function doEndTurn(gs, idx) {
   const p = gs.players[idx]; const last = gs.lastRoll || [];
+  if (gs.phase === "buy") {
+    gs.log.push(`⚠️ ${p.name} must buy or auction this property.`);
+    return;
+  }
   if (p.money < 0) {
     gs.log.push(`⚠️ ${p.name} cannot end turn with negative balance.`);
     gs.phase = "action";
@@ -800,9 +915,7 @@ function doBuild(gs, idx, data) {
   }
   const hc = sp.houseCost || 100;
   if (p.money < hc || (sp.houses||0) >= 5) return;
-  if (gs.settings.evenBuild) {
-    if (setTiles.length && (sp.houses||0) > Math.min(...setTiles.map(s => s.houses||0))) return;
-  }
+  if (setTiles.length && (sp.houses||0) > Math.min(...setTiles.map(s => s.houses||0))) return;
   p.money -= hc; sp.houses = (sp.houses||0) + 1;
   gs.log.push(`🏗️ ${p.name} built on ${sp.name}`);
 }
@@ -813,9 +926,7 @@ function doSellHouse(gs, idx, data) {
   const sp = gs.board[pos];
   if (!sp || sp.owner !== p.id || !(sp.houses||0)) return;
   const setTiles = getPropertySet(gs, sp);
-  if (gs.settings.evenBuild) {
-    if (setTiles.length && (sp.houses||0) < Math.max(...setTiles.map(s => s.houses||0))) return;
-  }
+  if (setTiles.length && (sp.houses||0) < Math.max(...setTiles.map(s => s.houses||0))) return;
   earnMoney(gs, idx, Math.floor((sp.houseCost||100) / 2), "sold house");
   sp.houses--;
 }
@@ -859,8 +970,15 @@ function doUseJailCard(gs, idx) {
 function doUseGovProt(gs, idx) {
   const p = gs.players[idx];
   if (!p.badDebt || p.govProtCards < 1) return;
-  p.govProtCards--; Object.assign(p, {badDebt:false,badDebtTurns:0,inJail:false});
-  earnMoney(gs, idx, gs.settings.govBailoutAmount, "Gov bailout"); gs.phase = "action";
+  const debtCleared = Number(p.badDebtAmount || 0);
+  p.govProtCards--; Object.assign(p, {badDebt:false,badDebtTurns:0,inJail:false,jailTurns:0,badDebtAmount:0});
+  const grant = gs.settings.govBailoutAmount;
+  earnMoney(gs, idx, grant, "Gov bailout");
+  const cur = gs.settings.currency;
+  const msg = `🏛️ ${p.name} used a Gov Card: debt cleared + ${cur}${grant} bailout.`;
+  gs.log.push(msg);
+  gs.pendingEvent = {type:"gov_prot",message:msg,debtCleared,hazardCompensation:0,cashGrant:grant};
+  gs.phase = "gov_prot_event";
 }
 
 function doTravelAir(gs, idx, data) {
@@ -1212,9 +1330,19 @@ export function generateDefaultBoard(S) {
       if (S === 10) {
         // Keep 44-tile west side contiguous for country runs; airport is injected later.
       } else {
-        template[Math.floor(S / 5)] = "chest";
-        template[Math.floor(2 * S / 5)] = "tax_return";
-        template[Math.floor(4 * S / 5)] = "property_tax";
+        const chestIdx = Math.floor(S / 5);
+        const taxReturnIdx = Math.floor(2 * S / 5);
+        const govProtIdx = Math.min(S - 1, taxReturnIdx + 2);
+        let propertyTaxIdx = Math.floor(4 * S / 5);
+        if (propertyTaxIdx === govProtIdx || propertyTaxIdx === taxReturnIdx + 1) {
+          const fallback = [propertyTaxIdx + 1, propertyTaxIdx - 1, S - 1, 0]
+            .find((idx) => idx >= 0 && idx < S && idx !== govProtIdx && idx !== taxReturnIdx && idx !== (taxReturnIdx + 1));
+          if (fallback != null) propertyTaxIdx = fallback;
+        }
+        template[chestIdx] = "chest";
+        template[taxReturnIdx] = "tax_return";
+        template[govProtIdx] = "gov_prot";
+        template[propertyTaxIdx] = "property_tax";
       }
       // Add extra special for 44-tile boards to preserve west side
       if (S === 10) {
@@ -1223,7 +1351,6 @@ export function generateDefaultBoard(S) {
     } else if (side === "south") {
       template[Math.floor(S / 6)] = "chance";
       template[mid] = "airport";  // Airport in middle
-      template[Math.floor(5 * S / 6)] = "luxury_tax";
     } else if (side === "west") {
       // For 44-tile boards (S=10), preserve west side for countries to avoid fragmenting runs
       // Special tiles are moved to north/east instead
@@ -1550,7 +1677,7 @@ export function getDomesticMaps() {
 // ════════════════════════════════════════════════
 export function doStartAuction(gs, pi, _data) {
   const p = gs.players[pi]; const pos = p.position; const sp = gs.board[pos];
-  if (!sp || sp.owner || !["property","airport","railway"].includes(sp.type)) { gs.phase = "action"; return; }
+  if (!sp || sp.owner || !["property","utility","airport","railway"].includes(sp.type)) { gs.phase = "action"; return; }
   openAuction(gs, pos, sp.price, false, pi);
 }
 
