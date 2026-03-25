@@ -810,7 +810,7 @@ function renderBoard(){
       const sideIsVertical=(side==="left"||side==="right");
       const showTileIcon=sp?.type!=="property";
       const iconHTML=showTileIcon?`<div class="sp-ico${sideIsVertical?" sp-ico-under":""}">${ico}</div>`:"";
-      const priceHTML=sp?.price?`<div class="sp-pr">${CUR()}${sp.price}</div>`:"";
+      const priceHTML=(sp?.price&&!(sp?.type==="property"&&sp?.owner))?`<div class="sp-pr">${CUR()}${sp.price}</div>`:"";
       const countryHTML="";
       const mapDotHTML="";
       const bodyHTML=sideIsVertical
@@ -1571,7 +1571,11 @@ function _renderActionsCore(){
   if(gs.phase==="buy"){
     const sp=gs.board[me.position];
     const canAuction=gs.settings?.auctionMode&&gs.settings.auctionMode!=="none";
+    const cc=me?.creditCard;
+    const creditRemaining=(cc?.limit||0)-(cc?.used||0);
+    const canCreditBuy=!!(cc?.active&&creditRemaining>=(sp?.price||0));
     h+=`<button class="btn btn-acc" onclick="ga('buy')">🏠 Buy ${CUR()}${sp?.price}</button>`;
+    if(canCreditBuy)h+=`<button class="btn btn-pur" onclick="ga('buy',{useCredit:true})">💳 Buy with Credit Card</button>`;
     if(canAuction)h+=`<button class="btn btn-blu" onclick="ga('start_auction')">🔨 Auction</button>`;
   }
   if(gs.phase==="auction"){

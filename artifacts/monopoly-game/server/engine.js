@@ -1505,11 +1505,11 @@ export function generateDefaultBoard(S) {
   const propSlots = Array.from({length:total}, (_, i) => i).filter(i => !specials.has(i));
   const grpSz = Math.ceil(propSlots.length / 8);
   const grpMap = {}; propSlots.forEach((pos,i) => grpMap[pos] = `g${Math.min(Math.floor(i/grpSz), 7)}`);
-  const basePrices = [20,50,90,130,180,240,300,360];
   const board = [];
   const standardByOrder = ["ng", "tr", "mx", "ru", "in", "jp", "us", "gb"];
   const countryByCode = new Map(COUNTRIES.map(c => [c.code, c]));
   const cityCursorByCode = {};
+  const cityIndexByCountry = {};
   
   // Apply consistent country distribution for ALL boards:
   // - Cheapest country gets 2 tiles
@@ -1525,8 +1525,8 @@ export function generateDefaultBoard(S) {
   
   if (middleCountries > 0) {
     const maxPerCountry = 3;  // Maximum tiles per country in the middle
-    const base = Math.floor(remaining / middleCountries);
-    const capped = Math.min(base, maxPerCountry);
+    const baseCount = Math.floor(remaining / middleCountries);
+    const capped = Math.min(baseCount, maxPerCountry);
     const extra = remaining - (capped * middleCountries);
     
     for (let i = 0; i < middleCountries; i++) {
@@ -1551,9 +1551,7 @@ export function generateDefaultBoard(S) {
     if (fixed.has(pos)) {
       board.push(fixed.get(pos));
     } else if (grpMap[pos] !== undefined) {
-      const grp = grpMap[pos]; const gi = parseInt(grp[1]); const base = basePrices[gi];
-      const slots = propSlots.filter(p => grpMap[p] === grp); const idx = slots.indexOf(pos);
-      const price = base + idx * 10;
+      const grp = grpMap[pos];
       
       // Assign country based on configured distribution
       const countryCode = standardByOrder[countryIdx] || "";
@@ -1561,6 +1559,13 @@ export function generateDefaultBoard(S) {
       const cityCursor = cityCursorByCode[countryCode] || 0;
       const city = country ? country.cities[cityCursor % country.cities.length] : `Property ${pos}`;
       cityCursorByCode[countryCode] = cityCursor + 1;
+      
+      // Use country's base price + increment for city position within country
+      const cityIdx = cityIndexByCountry[countryCode] || 0;
+      const countryBase = country?.base || 60;
+      const price = countryBase + cityIdx * 10;
+      cityIndexByCountry[countryCode] = cityIdx + 1;
+      
       propsInCurrentCountry++;
       
       // Move to next country when current country reaches its quota
