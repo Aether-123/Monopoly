@@ -34,6 +34,9 @@ app.use(express.static(GAME_PUBLIC_DIR));
 app.get("/", (_req, res) => {
   res.sendFile(join(GAME_PUBLIC_DIR, "index.html"));
 });
+app.get(/^\/game(?:\/.*)?$/, (_req, res) => {
+  res.sendFile(join(GAME_PUBLIC_DIR, "index.html"));
+});
 
 // ─── State ────────────────────────────────────────────
 /** @type {Map<string, object>} roomId → room */
@@ -694,8 +697,12 @@ function enforceEastTaxGovPattern(spaces) {
   const S = C - 1;
   if (C < 2 || S < 4) return board;
 
+  const eastStart = C + 1;
+  const eastEnd = (2 * C) - 1;
+  const eastSlots = Array.from({ length: S }, (_, i) => eastStart + i);
+
   const scaffold = E.generateDefaultBoard(S);
-  for (let i = 0; i < board.length; i++) {
+  for (let i = eastStart; i <= eastEnd; i++) {
     if (board[i]?.type !== "luxury_tax") continue;
     const fallback = scaffold[i];
     if (fallback?.type === "property") {
@@ -718,10 +725,6 @@ function enforceEastTaxGovPattern(spaces) {
       mortgaged: false,
     };
   }
-
-  const eastStart = C + 1;
-  const eastEnd = (2 * C) - 1;
-  const eastSlots = Array.from({ length: S }, (_, i) => eastStart + i);
 
   const preferredIdx = Math.max(0, Math.min(S - 4, Math.floor((2 * S) / 5)));
   const eastTaxPos = eastSlots.find(
@@ -752,6 +755,231 @@ function enforceEastTaxGovPattern(spaces) {
 
   board[taxPos] = { pos: taxPos, type: "tax_return", name: "$ Tax Refund" };
   board[govPos] = { pos: govPos, type: "gov_prot", name: "🏛️ Government Protection" };
+
+  return board;
+}
+
+function enforceRequestedCornerAdjacencyTiles(spaces) {
+  if (!Array.isArray(spaces) || !spaces.length) return spaces;
+  const board = spaces.map((sp, idx) => ({ ...(sp || {}), pos: idx }));
+  const total = board.length;
+  const C = Math.floor(total / 4);
+  if (C < 2) {
+    return board.map((sp) => {
+      if (sp?.type === "property_tax") return { ...sp, name: "🏠 Property Tax" };
+      return sp;
+    });
+  }
+
+  const goPos = board.findIndex(sp => sp?.type === "go");
+  const jailPos = board.findIndex(sp => sp?.type === "jail");
+  const freePos = board.findIndex(sp => sp?.type === "free_parking");
+  const goToJailPos = board.findIndex(sp => sp?.type === "go_to_jail");
+  const hasCorners = goPos >= 0 && jailPos > goPos && freePos > jailPos && goToJailPos > freePos;
+  if (!hasCorners) {
+    return board.map((sp) => {
+      if (sp?.type === "property_tax") return { ...sp, name: "🏠 Property Tax" };
+      return sp;
+    });
+  }
+
+  const eastBesideVacationPos = freePos - 1;
+  const southBesideGoToJailPos = goToJailPos - 1;
+  const S = Math.max(6, C - 1);
+  const scaffold = E.generateDefaultBoard(S);
+
+  const isEast = (pos) => pos > jailPos && pos < freePos;
+  const isSouth = (pos) => pos > freePos && pos < goToJailPos;
+
+  const luxuryFactory = (pos) => ({ pos, type: "luxury_tax", name: "💎 Luxury Tax", amount: 100 });
+
+  const moveTypeToPos = (targetPos, type, fallbackFactory) => {
+    if (!Number.isInteger(targetPos) || targetPos < 0 || targetPos >= total) return;
+    if (board[targetPos]?.type === type) {
+      if (type === "luxury_tax") {
+        board[targetPos] = { ...board[targetPos], pos: targetPos, name: "💎 Luxury Tax", amount: 100 };
+      } else if (type === "chance") {
+        board[targetPos] = { ...board[targetPos], pos: targetPos, name: "❓ Surprise" };
+      }
+      return;
+    }
+
+    const sourcePos = board.findIndex((sp, idx) => idx !== targetPos && sp?.type === type);
+    if (sourcePos >= 0) {
+      const src = { ...board[sourcePos], pos: sourcePos };
+      const dst = { ...board[targetPos], pos: targetPos };
+      board[targetPos] = { ...src, pos: targetPos };
+      board[sourcePos] = { ...dst, pos: sourcePos };
+      if (type === "luxury_tax") {
+        board[targetPos] = { ...board[targetPos], name: "💎 Luxury Tax", amount: 100 };
+      } else if (type === "chance") {
+        board[targetPos] = { ...board[targetPos], name: "❓ Surprise" };
+      }
+      return;
+    }
+
+    board[targetPos] = fallbackFactory(targetPos);
+  };
+
+  if (isSouth(southBesideGoToJailPos)) {
+    moveTypeToPos(southBesideGoToJailPos, "luxury_tax", luxuryFactory);
+  }
+  if (isEast(eastBesideVacationPos)) {
+    const eastPropertyTaxPos = board.findIndex(
+      (sp, idx) => sp?.type === "property_tax" && isEast(idx),
+    );
+
+    const toPropertyFromSeed = (pos, seedProperty) => {
+      const fallback = scaffold[pos];
+      const seed = seedProperty && seedProperty.type === "property"
+        ? seedProperty
+        : (fallback?.type === "property" ? fallback : null);
+      const source = seed || {
+        type: "property",
+        group: "g0",
+        name: `City ${pos}`,
+        countryCode: "",
+        countryFlag: "",
+        countryName: "",
+        price: 120,
+        rents: [12, 36, 72, 144, 220, 320],
+        houseCost: 60,
+        houses: 0,
+        owner: null,
+        mortgaged: false,
+      };
+      return {
+        ...source,
+        pos,
+        type: "property",
+        houses: 0,
+        owner: null,
+        mortgaged: false,
+      };
+    };
+
+    const pickNeighborPropertyPos = (taxPos) => {
+      const neighbors = [taxPos - 1, taxPos + 1];
+      return neighbors.find((pos) => {
+        const tile = board[pos];
+        return isEast(pos) && tile?.type === "property";
+      });
+    };
+
+    let seedProperty = null;
+    let seedPos = -1;
+    if (eastPropertyTaxPos >= 0) {
+      const neighborPos = pickNeighborPropertyPos(eastPropertyTaxPos);
+      if (neighborPos >= 0) {
+        seedPos = neighborPos;
+        seedProperty = board[neighborPos];
+      }
+    }
+
+    board[eastBesideVacationPos] = toPropertyFromSeed(eastBesideVacationPos, seedProperty);
+  }
+
+  return board.map((sp, idx) => {
+    const cur = { ...(sp || {}), pos: idx };
+    if (cur.type === "property_tax") {
+      return { ...cur, name: "🏠 Property Tax" };
+    }
+    if (cur.type === "luxury_tax") {
+      return { ...cur, name: "💎 Luxury Tax", amount: Number.isFinite(Number(cur.amount)) ? Number(cur.amount) : 100 };
+    }
+    if (cur.type === "chance") {
+      return { ...cur, name: "❓ Surprise" };
+    }
+    if (cur.type === "property") {
+      const fallback = scaffold[idx];
+      if (fallback?.type === "property") {
+        return {
+          ...fallback,
+          ...cur,
+          pos: idx,
+        };
+      }
+    }
+    return cur;
+  });
+}
+
+function enforceUniquePropertyCityNames(spaces) {
+  if (!Array.isArray(spaces) || !spaces.length) return spaces;
+  const board = spaces.map((sp, idx) => ({ ...(sp || {}), pos: idx }));
+  const properties = board.filter((sp) => sp?.type === "property");
+  if (properties.length <= 1) return board;
+
+  const normalizeNameKey = (value) => String(value || "").trim().toLowerCase();
+  const usedNames = new Set();
+
+  const countryCatalog = new Map(
+    (E.getCountriesList() || [])
+      .map((entry) => [
+        String(entry?.code || "").toLowerCase(),
+        Array.isArray(entry?.cities) ? entry.cities.slice() : [],
+      ]),
+  );
+
+  const registerIfAvailable = (name) => {
+    const key = normalizeNameKey(name);
+    if (!key) return false;
+    if (usedNames.has(key)) return false;
+    usedNames.add(key);
+    return true;
+  };
+
+  const findCatalogReplacement = (countryCode, currentName) => {
+    const code = String(countryCode || "").toLowerCase();
+    if (!code) return null;
+    const candidates = countryCatalog.get(code) || [];
+    if (!candidates.length) return null;
+
+    const currentKey = normalizeNameKey(currentName);
+    const differentUnused = candidates.find((candidate) => {
+      const candidateKey = normalizeNameKey(candidate);
+      return candidateKey && candidateKey !== currentKey && !usedNames.has(candidateKey);
+    });
+    if (differentUnused) return differentUnused;
+
+    const anyUnused = candidates.find((candidate) => {
+      const candidateKey = normalizeNameKey(candidate);
+      return candidateKey && !usedNames.has(candidateKey);
+    });
+    if (anyUnused) return anyUnused;
+
+    return null;
+  };
+
+  const makeUniqueSuffixName = (baseName) => {
+    const root = String(baseName || "City").trim() || "City";
+    let suffix = 2;
+    let candidate = `${root} ${suffix}`;
+    while (usedNames.has(normalizeNameKey(candidate))) {
+      suffix += 1;
+      candidate = `${root} ${suffix}`;
+    }
+    return candidate;
+  };
+
+  for (const tile of properties) {
+    const rawName = String(tile.name || "").trim();
+    const baseName = rawName || `City ${tile.pos}`;
+    if (registerIfAvailable(baseName)) {
+      tile.name = baseName;
+      continue;
+    }
+
+    const catalogName = findCatalogReplacement(tile.countryCode, baseName);
+    if (catalogName && registerIfAvailable(catalogName)) {
+      tile.name = catalogName;
+      continue;
+    }
+
+    const deduped = makeUniqueSuffixName(baseName);
+    registerIfAvailable(deduped);
+    tile.name = deduped;
+  }
 
   return board;
 }
@@ -1046,6 +1274,8 @@ function normalizeMapConfig(mapCfg) {
   if (preset === "worldwide" && Array.isArray(cfg.wwCities) && cfg.wwCities.length) {
     cfg.spaces = buildWorldwideBoard(cfg.wwCities, size, cfg.seed || "");
     cfg.spaces = enforceRequestedUtilityAndTopSet(cfg.spaces);
+    cfg.spaces = enforceRequestedCornerAdjacencyTiles(cfg.spaces);
+    cfg.spaces = enforceUniquePropertyCityNames(cfg.spaces);
     return cfg;
   }
 
@@ -1062,6 +1292,8 @@ function normalizeMapConfig(mapCfg) {
     }
     cfg.spaces = enforceEastTaxGovPattern(cfg.spaces);
     cfg.spaces = enforceRequestedUtilityAndTopSet(cfg.spaces);
+    cfg.spaces = enforceRequestedCornerAdjacencyTiles(cfg.spaces);
+    cfg.spaces = enforceUniquePropertyCityNames(cfg.spaces);
     return cfg;
   }
 
@@ -1076,6 +1308,8 @@ function normalizeMapConfig(mapCfg) {
     cfg.spaces = enforceSingleTaxReturnTile(cfg.spaces);
     cfg.spaces = enforceEastTaxGovPattern(cfg.spaces);
     cfg.spaces = enforceRequestedUtilityAndTopSet(cfg.spaces);
+    cfg.spaces = enforceRequestedCornerAdjacencyTiles(cfg.spaces);
+    cfg.spaces = enforceUniquePropertyCityNames(cfg.spaces);
     return cfg;
   }
 
@@ -1092,6 +1326,8 @@ function normalizeMapConfig(mapCfg) {
     cfg.spaces = enforceEastTaxGovPattern(cfg.spaces);
     cfg.spaces = enforceRequestedUtilityAndTopSet(cfg.spaces);
     cfg.spaces = enforceRandomCountrySetConstraints(cfg.spaces, { seedSalt: cfg.seed });
+    cfg.spaces = enforceRequestedCornerAdjacencyTiles(cfg.spaces);
+    cfg.spaces = enforceUniquePropertyCityNames(cfg.spaces);
     return cfg;
   }
 
@@ -1106,6 +1342,8 @@ function normalizeMapConfig(mapCfg) {
   }
   cfg.spaces = enforceEastTaxGovPattern(cfg.spaces);
   cfg.spaces = enforceRequestedUtilityAndTopSet(cfg.spaces);
+  cfg.spaces = enforceRequestedCornerAdjacencyTiles(cfg.spaces);
+  cfg.spaces = enforceUniquePropertyCityNames(cfg.spaces);
   return cfg;
 }
 
@@ -1938,8 +2176,10 @@ app.use(express.json({ limit: "1mb" }));
 app.post("/mapi/worldwide-board", (req, res) => {
   const S = Math.max(6, Math.min(parseInt(req.body?.S || "9"), 9));
   const wwCities = Array.isArray(req.body?.wwCities) ? req.body.wwCities : [];
-  const board = enforceRequestedUtilityAndTopSet(buildWorldwideBoard(wwCities, S));
-  res.json({ board, tilesPerSide: S });
+  const board = enforceRequestedCornerAdjacencyTiles(
+    enforceRequestedUtilityAndTopSet(buildWorldwideBoard(wwCities, S)),
+  );
+  res.json({ board: enforceUniquePropertyCityNames(board), tilesPerSide: S });
 });
 
 app.get("/mapi/domestic-board", (req, res) => {
@@ -1955,6 +2195,8 @@ app.get("/mapi/domestic-board", (req, res) => {
   board = enforceSingleTaxReturnTile(board);
   board = enforceEastTaxGovPattern(board);
   board = enforceRequestedUtilityAndTopSet(board);
+  board = enforceRequestedCornerAdjacencyTiles(board);
+  board = enforceUniquePropertyCityNames(board);
   res.json({preset, board, tilesPerSide: S});
 });
 
@@ -1973,6 +2215,8 @@ app.get("/mapi/random-board", (req, res) => {
   board = enforceEastTaxGovPattern(board);
   board = enforceRequestedUtilityAndTopSet(board);
   board = enforceRandomCountrySetConstraints(board, { seedSalt: seed });
+  board = enforceRequestedCornerAdjacencyTiles(board);
+  board = enforceUniquePropertyCityNames(board);
   res.json({seed, board, tilesPerSide: S});
 });
 
@@ -1987,6 +2231,8 @@ app.get("/mapi/default-board", (req, res) => {
   board = enforceSingleTaxReturnTile(board);
   board = enforceEastTaxGovPattern(board);
   board = enforceRequestedUtilityAndTopSet(board);
+  board = enforceRequestedCornerAdjacencyTiles(board);
+  board = enforceUniquePropertyCityNames(board);
   res.json({board, tilesPerSide: S});
 });
 

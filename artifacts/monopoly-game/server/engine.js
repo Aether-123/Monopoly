@@ -194,8 +194,12 @@ function enforceEastTaxGovPattern(board) {
   const S = C - 1;
   if (C < 2 || S < 4) return out;
 
+  const eastStart = C + 1;
+  const eastEnd = (2 * C) - 1;
+  const eastSlots = Array.from({ length: S }, (_, i) => eastStart + i);
+
   const scaffold = generateDefaultBoard(S);
-  for (let i = 0; i < out.length; i++) {
+  for (let i = eastStart; i <= eastEnd; i++) {
     if (out[i]?.type !== "luxury_tax") continue;
     const fallback = scaffold[i];
     if (fallback?.type === "property") {
@@ -218,10 +222,6 @@ function enforceEastTaxGovPattern(board) {
       mortgaged: false,
     };
   }
-
-  const eastStart = C + 1;
-  const eastEnd = (2 * C) - 1;
-  const eastSlots = Array.from({ length: S }, (_, i) => eastStart + i);
 
   const preferredIdx = Math.max(0, Math.min(S - 4, Math.floor((2 * S) / 5)));
   const eastTaxPos = eastSlots.find((pos) => out[pos]?.type === "tax_return" && (pos + 3) <= eastEnd);
