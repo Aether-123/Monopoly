@@ -4,7 +4,7 @@
 "use strict";
 
 /* ─── GLOBALS ─────────────────────────────────────────── */
-let socket, myId, myRoomId, lobbyData, gs=null;
+let socket, myId, myRoomId, roomHostId, lobbyData, gs=null;
 let curBoardType="standard", curSize=9, curRMode="balanced", curSeed="";
 let wwSelectedCities={};
 let _tokenMoving=false, _prevMoney={};
@@ -394,18 +394,21 @@ function _initSocketCore(){
   });
   socket.on("disconnect",()=>{if(qid("conn-info"))qid("conn-info").textContent="❌ Disconnected";});
   socket.on("online_count",({count})=>{if(qid("online-cnt"))qid("online-cnt").textContent=count+" online";});
-  socket.on("room_created",({roomId,player})=>{myId=player.id;myRoomId=roomId;try{localStorage.setItem("mono_game_session",JSON.stringify({roomId,playerId:player.id}));}catch(e){}const codeEl=qid("room-code-display-lobby");if(codeEl)codeEl.textContent=roomId;ss("lobby");});
+  socket.on("room_created",({roomId,player})=>{myId=player.id;myRoomId=roomId;roomHostId=player.id;try{localStorage.setItem("mono_game_session",JSON.stringify({roomId,playerId:player.id}));}catch(e){}const codeEl=qid("room-code-display-lobby");if(codeEl)codeEl.textContent=roomId;ss("lobby");});
   socket.on("room_joined",({roomId,player})=>{myId=player.id;myRoomId=roomId;try{localStorage.setItem("mono_game_session",JSON.stringify({roomId,playerId:player.id}));}catch(e){}const codeEl=qid("room-code-display-lobby");if(codeEl)codeEl.textContent=roomId;ss("lobby");});
   socket.on("join_error",({message})=>toast("❌ "+message));
   socket.on("start_error",({message})=>toast("❌ "+(message||"Cannot start game yet.")));
-  socket.on("lobby_update",d=>{lobbyData=d;renderLobby();});
-  socket.on("game_started",({gameState})=>{gs=gameState;ss("game");renderGame(true);});
+  socket.on("lobby_update",d=>{lobbyData=d;roomHostId=d.hostId;renderLobby();});
+  socket.on("game_started",({gameState})=>{gs=gameState;ss("game");renderGame(true);cm("m-win");});
   socket.on("state_update",({gameState})=>onStateUpdate(gameState));
   socket.on("game_over",({winnerId})=>{try{localStorage.removeItem("mono_game_session");}catch(e){}showWin(winnerId);});
+  socket.on("board_selected",({mapConfig})=>{toast("🗺️ New board selected. Waiting for host to restart game...");});
   socket.on("trade_incoming",d=>showIncomingTrade(d));
   socket.on("trade_accepted",()=>{toast("✅ Trade accepted!");cm("m-t-in");cm("m-neg");renderSidePanels();});
-  socket.on("trade_declined",()=>{toast("❌ Trade declined.");cm("m-neg");});
+  socket.on("trade_declined",({tradeId})=>{toast("❌ Trade declined.");cm("m-t-in");cm("m-neg");});
   socket.on("trade_negotiate",d=>showNegotiateModal(d));
+  socket.on("trade_chip_in",d=>showChipInNotification(d));
+  socket.on("trade_chip_response",d=>handleChipResponse(d));
   socket.on("chat_msg",m=>appendChat(m));
   socket.on("player_left",({playerId})=>{const p=gs?.players.find(x=>x.id===playerId);if(p){p.disconnected=true;renderGame(false);}});
   socket.on("auction_ended",()=>{stopAuctionTimer();});
@@ -431,7 +434,9 @@ function ss(n){
   if(target){
     target.classList.add("active");
     target.style.pointerEvents="";
+    target.scrollTop=0;
   }
+  window.scrollTo(0,0);
 }
 
 /* ─── STATE UPDATE ─────────────────────────────────────── */
@@ -772,30 +777,7 @@ function renderTokensInstant(init){
 }
 
 /* ─── PLAYERS PANEL ─────────────────────────────────────── */
-function renderPlayersPanel(){
-  const el=qid("panel-players");if(!el||!gs)return;
-  el.innerHTML=gs.players.map((p,i)=>{
-    const loan=p.loans?.reduce((s,l)=>s+l.remaining,0)||0;
-    const isCur=i===gs.currentPlayerIdx;
-    const isMe=p.id===myId;
-    const canBankrupt=isMe&&!p.bankrupted;
-    const avImg=drawAvatarSVG(p.avatar||{},30);
-    return `<div class="pp-row${isCur?" pp-cur":""}${p.bankrupted?" pp-bankrupt":""}" id="pp-row-${p.id}">
-      <img src="${avImg}" width="30" height="30" style="border-radius:50%;border:2px solid ${p.color};flex-shrink:0;animation:${isCur?'avatarPulse 2s infinite':'none'}">
-      <div class="pp-info">
-        <div class="pp-name-row">
-          <div class="pp-name" style="color:${p.color}">${p.name}${p.disconnected?" 📴":p.badDebt?" ⛓️":isCur?" 🎲":""}</div>
-        </div>
-        <div class="pp-cash">${CUR()}${p.money.toLocaleString()}</div>
-        <div class="pp-sub">${gs.board.filter(s=>s.owner===p.id).length} prop${loan>0?` · 💸${CUR()}${loan}`:""}</div>
-      </div>
-      <div class="pp-right-actions">
-        ${canBankrupt?`<button class="btn btn-red btn-sm pp-bankrupt-btn" onclick="confirmDeclareBankrupt()">Bankrupt</button>`:""}
-        ${p.bankrupted?'<span class="pp-badge pp-badge-bankrupt">💀 Bankrupt</span>':""}
-      </div>
-    </div>`;
-  }).join("");
-}
+/* ─── PLAYERS PANEL (rendered by override below) ───────────────────────────────── */
 
 /* ─── MY PROPERTIES PANEL ───────────────────────────────── */
 function renderPropsPanel(){
@@ -863,7 +845,42 @@ function renderTradePanel(){
     </div>`).join("");
 }
 
-function selectTradeTarget(pid){_tradeTarget=pid;tFromSel=[];tToSel=[];renderTradePanel();renderTradeExpanded();}
+function isSmallTradeUI(){
+  return window.matchMedia?.("(max-width: 900px)")?.matches||window.matchMedia?.("(max-width: 1024px) and (pointer: coarse)")?.matches;
+}
+
+function selectTradeTarget(pid){
+  _tradeTarget=pid;tFromSel=[];tToSel=[];
+  renderTradePanel();
+  renderTradeExpanded();
+  if(isSmallTradeUI()){
+    renderTradeComposerModal();
+    om("m-trade-compose");
+  }
+}
+
+function renderTradeComposerModal(){
+  const el=qid("trade-compose-c");if(!el||!gs||!_tradeTarget)return;
+  const me=gs.players.find(p=>p.id===myId);
+  const to=gs.players.find(p=>p.id===_tradeTarget);
+  if(!me||!to)return;
+  const myP=gs.board.filter(s=>["property","airport","railway","utility"].includes(s.type)&&s.owner===me.id);
+  const thP=gs.board.filter(s=>["property","airport","railway","utility"].includes(s.type)&&s.owner===to.id);
+  el.innerHTML=`<div style="font-size:.85rem;font-weight:700;margin-bottom:.5rem;color:var(--accent)">Trade with ${to.name}</div>
+    <div style="display:grid;grid-template-columns:1fr;gap:.55rem;margin-bottom:.55rem">
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:.45rem">
+        <div style="font-size:.72rem;color:var(--muted);margin-bottom:.25rem">You give</div>
+        ${myP.map(s=>`<div class="trade-prop-row ${tFromSel.includes(s.pos)?"sel":""}" onclick="togTP('from',${s.pos})">${cityLabel(s)}</div>`).join("")||`<span style="font-size:.72rem;color:var(--muted)">—</span>`}
+        <input type="number" id="tf-m-mobile" value="0" min="0" max="${me.money}" step="50" class="inp" style="width:100%;font-size:.76rem;margin-top:.35rem">
+      </div>
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:.45rem">
+        <div style="font-size:.72rem;color:var(--muted);margin-bottom:.25rem">${to.name} gives</div>
+        ${thP.map(s=>`<div class="trade-prop-row ${tToSel.includes(s.pos)?"sel":""}" onclick="togTP('to',${s.pos})">${cityLabel(s)}</div>`).join("")||`<span style="font-size:.72rem;color:var(--muted)">—</span>`}
+        <input type="number" id="tt-m-mobile" value="0" min="0" max="${to.money}" step="50" class="inp" style="width:100%;font-size:.76rem;margin-top:.35rem">
+      </div>
+    </div>
+    <button class="btn btn-acc" style="width:100%" onclick="sendTrade()">📨 Send Offer</button>`;
+}
 
 function renderTradeExpanded(){
   const el=qid("trade-expanded");if(!el||!gs)return;
@@ -872,8 +889,8 @@ function renderTradeExpanded(){
   const me=gs.players.find(p=>p.id===myId);
   const to=gs.players.find(p=>p.id===_tradeTarget);
   if(!me||!to)return;
-  const myP=gs.board.filter(s=>["property","airport","railway"].includes(s.type)&&s.owner===me.id);
-  const thP=gs.board.filter(s=>["property","airport","railway"].includes(s.type)&&s.owner===to.id);
+  const myP=gs.board.filter(s=>["property","airport","railway","utility"].includes(s.type)&&s.owner===me.id);
+  const thP=gs.board.filter(s=>["property","airport","railway","utility"].includes(s.type)&&s.owner===to.id);
   el.innerHTML=`<div style="font-size:.73rem;font-weight:700;margin-bottom:.4rem;color:var(--accent)">Trade with ${to.name}</div>
     <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:.3rem;margin-bottom:.4rem">
       <div>
@@ -891,38 +908,61 @@ function renderTradeExpanded(){
     <button class="btn btn-acc btn-sm" style="width:100%" onclick="sendTrade()">📨 Send Offer</button>`;
 }
 
-function togTP(side,pos){const arr=side==="from"?tFromSel:tToSel;const i=arr.indexOf(pos);if(i>=0)arr.splice(i,1);else arr.push(pos);renderTradeExpanded();}
-
-function sendTrade(){
-  const fm=+qid("tf-m")?.value||0,tm=+qid("tt-m")?.value||0;
-  if(!_tradeTarget){toast("Select a player first");return;}
-  socket.emit("trade_offer",{toPlayerId:_tradeTarget,offer:{fromProps:[...tFromSel],toProps:[...tToSel],fromMoney:fm,toMoney:tm}});
-  toast("📨 Trade offer sent!");tFromSel=[];tToSel=[];renderTradeExpanded();
+function togTP(side,pos){
+  const arr=side==="from"?tFromSel:tToSel;
+  const i=arr.indexOf(pos);
+  if(i>=0)arr.splice(i,1);else arr.push(pos);
+  renderTradeExpanded();
+  if(!qid("m-trade-compose")?.classList.contains("ovh"))renderTradeComposerModal();
 }
 
-function showIncomingTrade({tradeId,fromId,toId,offer}){
-  if(toId!==myId)return;
-  incomingTrade={tradeId,fromId,offer};
+function sendTrade(){
+  const useMobile=!qid("m-trade-compose")?.classList.contains("ovh");
+  const fm=useMobile?(+qid("tf-m-mobile")?.value||0):(+qid("tf-m")?.value||0);
+  const tm=useMobile?(+qid("tt-m-mobile")?.value||0):(+qid("tt-m")?.value||0);
+  if(!_tradeTarget){toast("Select a player first");return;}
+  socket.emit("trade_offer",{toPlayerId:_tradeTarget,offer:{fromProps:[...tFromSel],toProps:[...tToSel],fromMoney:fm,toMoney:tm}});
+  toast("📨 Trade offer sent!");
+  tFromSel=[];tToSel=[];
+  renderTradeExpanded();
+  if(!qid("m-trade-compose")?.classList.contains("ovh"))cm("m-trade-compose");
+}
+
+function showIncomingTrade({tradeId,fromId,toId,fromName,toName,offer}){
   const from=gs?.players.find(p=>p.id===fromId);
+  const to=gs?.players.find(p=>p.id===toId);
+  const isDirectRecipient=toId===myId;
+  const isInvolved=fromId===myId||toId===myId;
   const dp=pos=>gs?.board[pos]?`${cityLabel(gs.board[pos])}`:`#${pos}`;
+  
+  if(isDirectRecipient) incomingTrade={tradeId,fromId,offer};
+  
+  let actionButtons=``;
+  if(isDirectRecipient){
+    actionButtons=`
+      <button class="btn btn-acc" onclick="respondTrade(true)">✅ Accept</button>
+      <button class="btn btn-red" onclick="respondTrade(false)">❌ Decline</button>
+      <button class="btn btn-out" onclick="openNegotiate()">🔄 Counter</button>`;
+  } else if(!isInvolved){
+    actionButtons=`<button class="btn btn-out" onclick="showSelectChipTargets('${tradeId}','${fromId}','${toId}')">💡 Chip In</button>`;
+  }
+  
   qid("tin-c").innerHTML=`
-    <h2>💱 Offer from <span style="color:${from?.color||"var(--accent)"}">${from?.name||"?"}</span></h2>
+    <h2>💱 Trade: <span style="color:${from?.color||"var(--accent)"}">${fromName||from?.name||"?"}</span> ↔️ <span style="color:${to?.color||"var(--orange)"}">${toName||to?.name||"?"}</span></h2>
     <div style="display:flex;gap:.6rem;flex-wrap:wrap;margin:.7rem 0">
       <div style="flex:1;min-width:120px;background:var(--bg);border-radius:8px;padding:.6rem">
-        <div style="font-size:.68rem;color:var(--muted);margin-bottom:.2rem">They give you</div>
+        <div style="font-size:.68rem;color:var(--muted);margin-bottom:.2rem">${fromName||from?.name||"?"} gives</div>
         <div style="font-size:.78rem">${offer.fromProps?.map(dp).join(", ")||"nothing"}</div>
         ${offer.fromMoney?`<div style="color:var(--green);font-size:.85rem;font-weight:700">+${CUR()}${offer.fromMoney}</div>`:""}
       </div>
       <div style="flex:1;min-width:120px;background:var(--bg);border-radius:8px;padding:.6rem">
-        <div style="font-size:.68rem;color:var(--muted);margin-bottom:.2rem">You give</div>
+        <div style="font-size:.68rem;color:var(--muted);margin-bottom:.2rem">${toName||to?.name||"?"} gives</div>
         <div style="font-size:.78rem">${offer.toProps?.map(dp).join(", ")||"nothing"}</div>
         ${offer.toMoney?`<div style="color:var(--red);font-size:.85rem;font-weight:700">-${CUR()}${offer.toMoney}</div>`:""}
       </div>
     </div>
     <div style="display:flex;gap:.4rem;flex-wrap:wrap">
-      <button class="btn btn-acc" onclick="respondTrade(true)">✅ Accept</button>
-      <button class="btn btn-red" onclick="respondTrade(false)">❌ Decline</button>
-      <button class="btn btn-out" onclick="openNegotiate()">🔄 Counter</button>
+      ${actionButtons}
     </div>`;
   om("m-t-in");
 }
@@ -930,23 +970,134 @@ function showIncomingTrade({tradeId,fromId,toId,offer}){
 function declineTrade(){respondTrade(false);}
 function respondTrade(ok){if(!incomingTrade)return;socket.emit("trade_respond",{...incomingTrade,accepted:ok});cm("m-t-in");incomingTrade=null;}
 
+function showSelectChipTargets(tradeId,fromId,toId){
+  const from=gs?.players.find(p=>p.id===fromId);
+  const to=gs?.players.find(p=>p.id===toId);
+  qid("chip-target-c").innerHTML=`
+    <p style="color:var(--muted);font-size:.75rem">Who do you want to negotiate with?</p>
+    <div style="display:flex;gap:.4rem;flex-wrap:wrap;margin:.6rem 0">
+      <label style="display:flex;align-items:center;gap:.3rem;cursor:pointer">
+        <input type="checkbox" id="chip-tgt-from" checked> <span style="color:${from?.color||'var(--accent)'};">${from?.name}</span>
+      </label>
+      <label style="display:flex;align-items:center;gap:.3rem;cursor:pointer">
+        <input type="checkbox" id="chip-tgt-to" checked> <span style="color:${to?.color||'var(--orange)'};">${to?.name}</span>
+      </label>
+    </div>
+    <div style="display:flex;gap:.4rem">
+      <button class="btn btn-acc" onclick="proceedWithChipIn('${tradeId}','${fromId}','${toId}')">Continue</button>
+      <button class="btn btn-out" onclick="cm('m-chip-target')">Cancel</button>
+    </div>`;
+  om("m-chip-target");
+}
+
+function proceedWithChipIn(tradeId,fromId,toId){
+  const targets=[];
+  if(qid("chip-tgt-from")?.checked) targets.push(fromId);
+  if(qid("chip-tgt-to")?.checked) targets.push(toId);
+  if(targets.length===0){toast("Select at least 1 player");return;}
+  cm("m-chip-target");
+  showChipInOffer(tradeId,fromId,toId,targets);
+}
+
+function showChipInOffer(tradeId,fromId,toId,targetIds){
+  if(!gs)return;
+  const from=gs.players.find(p=>p.id===fromId);
+  const to=gs.players.find(p=>p.id===toId);
+  const me=gs.players.find(p=>p.id===myId);
+  if(!me||!targetIds||targetIds.length===0)return;
+  
+  const myP=gs.board.filter(s=>["property","airport","railway","utility"].includes(s.type)&&s.owner===myId);
+  const fromP=gs.board.filter(s=>["property","airport","railway","utility"].includes(s.type)&&s.owner===fromId);
+  const toP=gs.board.filter(s=>["property","airport","railway","utility"].includes(s.type)&&s.owner===toId);
+  
+  const myPropRows=myP.map(s=>'<div class="trade-prop-row" id="chip-f-'+s.pos+'" onclick="this.classList.toggle(\'sel\')">'+cityLabel(s)+'</div>').join("");
+  const fromPRows=fromP.map(s=>'<div class="trade-prop-row" id="chip-t1-'+s.pos+'" onclick="this.classList.toggle(\'sel\')">'+cityLabel(s)+'</div>').join("");
+  const toPRows=toP.map(s=>'<div class="trade-prop-row" id="chip-t2-'+s.pos+'" onclick="this.classList.toggle(\'sel\')">'+cityLabel(s)+'</div>').join("");
+  
+  const targetStr=targetIds.map(id=>gs.players.find(p=>p.id===id)?.name||"?").join(" & ");
+  let fromSection="", toSection="";
+  
+  if(targetIds.includes(fromId)){
+    fromSection=`<div>
+      <div style="font-size:.72rem;font-weight:700;color:var(--orange);margin-bottom:.2rem">Want from ${from?.name}</div>
+      <div class="trade-prop-row" onclick="document.querySelectorAll('[id^=chip-t1-]').forEach(e=>e.classList.remove('sel'))" style="background:var(--bg);border:1px solid var(--border);font-weight:700">⊘ None</div>
+      ${fromPRows}
+      <input type="number" id="chip-t1m" value="0" min="0" max="${from?.money||0}" step="50" class="inp" placeholder="$ from ${from?.name}" style="width:100%;margin-top:.3rem;font-size:.72rem">
+    </div>`;
+  }
+  if(targetIds.includes(toId)){
+    toSection=`<div>
+      <div style="font-size:.72rem;font-weight:700;color:var(--orange);margin-bottom:.2rem">Want from ${to?.name}</div>
+      <div class="trade-prop-row" onclick="document.querySelectorAll('[id^=chip-t2-]').forEach(e=>e.classList.remove('sel'))" style="background:var(--bg);border:1px solid var(--border);font-weight:700">⊘ None</div>
+      ${toPRows}
+      <input type="number" id="chip-t2m" value="0" min="0" max="${to?.money||0}" step="50" class="inp" placeholder="$ from ${to?.name}" style="width:100%;margin-top:.3rem;font-size:.72rem">
+    </div>`;
+  }
+  
+  qid("chip-c").innerHTML=`
+    <p style="color:var(--muted);font-size:.75rem">Counter-offer to ${targetStr}</p>
+    <div style="display:grid;grid-template-columns:${targetIds.length===2?'1fr 1fr 1fr':'1fr 1fr'};gap:.6rem;margin-bottom:.5rem">
+      <div>
+        <div style="font-size:.72rem;font-weight:700;color:var(--accent);margin-bottom:.2rem">I'll give</div>
+        <div class="trade-prop-row" onclick="document.querySelectorAll('[id^=chip-f-]').forEach(e=>e.classList.remove('sel'))" style="background:var(--bg);border:1px solid var(--border);font-weight:700">⊘ None</div>
+        ${myPropRows}
+        <input type="number" id="chip-fm" value="0" min="0" max="${me?.money||0}" step="50" class="inp" placeholder="$ I send" style="width:100%;margin-top:.3rem;font-size:.72rem">
+      </div>
+      ${fromSection}${toSection}
+    </div>
+    <input class="inp" id="chip-msg" placeholder="Message (optional)" maxlength="200" style="width:100%;margin-bottom:.4rem">
+    <div style="display:flex;gap:.4rem">
+      <button class="btn btn-acc" onclick="sendChipIn('${tradeId}',${JSON.stringify(targetIds)})">💡 Send Offer</button>
+      <button class="btn btn-out" onclick="cm('m-chip')">Cancel</button>
+    </div>`;
+  cm("m-t-in");
+  om("m-chip");
+}
+
+function sendChipIn(tradeId,targetIds){
+  if(!targetIds||targetIds.length===0){toast("Select target players");return;}
+  const fp=[...document.querySelectorAll("[id^='chip-f-'].sel")].map(e=>parseInt(e.id.split("-")[2]));
+  const t1p=[...document.querySelectorAll("[id^='chip-t1-'].sel")].map(e=>parseInt(e.id.split("-")[2]));
+  const t2p=[...document.querySelectorAll("[id^='chip-t2-'].sel")].map(e=>parseInt(e.id.split("-")[2]));
+  
+  const wants={};
+  if(targetIds[0]&&targetIds.length>0){
+    if(t1p.length>0||qid("chip-t1m")?.value>0) wants[targetIds[0]]={props:t1p,money:+qid("chip-t1m")?.value||0};
+  }
+  if(targetIds[1]&&targetIds.length>1){
+    if(t2p.length>0||qid("chip-t2m")?.value>0) wants[targetIds[1]]={props:t2p,money:+qid("chip-t2m")?.value||0};
+  }
+  
+  socket.emit("trade_chip_in",{
+    tradeId,targetIds,
+    myProps:fp,myMoney:+qid("chip-fm")?.value||0,
+    wants:wants,
+    message:qid("chip-msg")?.value||""
+  });
+  cm("m-chip");
+  const targetNames=targetIds.map(id=>gs?.players.find(p=>p.id===id)?.name||"?").join(" & ");
+  toast(`💡 Offer sent to ${targetNames}!`);
+}
+
 function openNegotiate(){
   if(!incomingTrade||!gs)return;
   const from=gs.players.find(p=>p.id===incomingTrade.fromId);
   const me=gs.players.find(p=>p.id===myId);
-  const myP=gs.board.filter(s=>["property","airport","railway"].includes(s.type)&&s.owner===myId);
-  const thP=gs.board.filter(s=>["property","airport","railway"].includes(s.type)&&s.owner===incomingTrade.fromId);
+  const myP=gs.board.filter(s=>["property","airport","railway","utility"].includes(s.type)&&s.owner===myId);
+  const thP=gs.board.filter(s=>["property","airport","railway","utility"].includes(s.type)&&s.owner===incomingTrade.fromId);
   qid("neg-c").innerHTML=`
     <p style="color:var(--muted);font-size:.78rem">Send a counter-offer to ${from?.name}</p>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:.6rem;margin-bottom:.5rem">
       <div>
         <div style="font-size:.72rem;font-weight:700;color:var(--accent);margin-bottom:.2rem">I'll give</div>
-        ${myP.map(s=>`<div class="trade-prop-row" id="neg-f-${s.pos}" onclick="this.classList.toggle('sel')">${cityLabel(s)}</div>`).join("")||"<span style='font-size:.68rem;color:var(--muted)'>None</span>"}
+        <div class="trade-prop-row" onclick="document.querySelectorAll('[id^=neg-f-]').forEach(e=>e.classList.remove('sel'))" style="background:var(--bg);border:1px solid var(--border);font-weight:700">⊘ None</div>
+        ${myP.map(s=>`<div class="trade-prop-row" id="neg-f-${s.pos}" onclick="this.classList.toggle('sel')">${cityLabel(s)}</div>`).join("")}
         <input type="number" id="neg-fm" value="0" min="0" max="${me?.money||0}" step="50" class="inp" placeholder="$ you send" style="width:100%;margin-top:.3rem;font-size:.72rem">
       </div>
       <div>
         <div style="font-size:.72rem;font-weight:700;color:var(--orange);margin-bottom:.2rem">I want</div>
-        ${thP.map(s=>`<div class="trade-prop-row" id="neg-t-${s.pos}" onclick="this.classList.toggle('sel')">${cityLabel(s)}</div>`).join("")||"<span style='font-size:.68rem;color:var(--muted)'>None</span>"}
+        <div class="trade-prop-row" onclick="document.querySelectorAll('[id^=neg-t-]').forEach(e=>e.classList.remove('sel'))" style="background:var(--bg);border:1px solid var(--border);font-weight:700">⊘ None</div>
+        ${thP.map(s=>`<div class="trade-prop-row" id="neg-t-${s.pos}" onclick="this.classList.toggle('sel')">${cityLabel(s)}</div>`).join("")}
         <input type="number" id="neg-tm" value="0" min="0" max="${from?.money||0}" step="50" class="inp" placeholder="$ you want" style="width:100%;margin-top:.3rem;font-size:.72rem">
       </div>
     </div>
@@ -993,6 +1144,47 @@ function showNegotiateModal({tradeId,fromId,toId,offer,message}){
       <button class="btn btn-out" onclick="openNegotiate()">🔄 Counter Again</button>
     </div>`;
   om("m-t-in");
+}
+
+function showChipInNotification({tradeId,chipFromId,chipFromName,targetId,targetName,myProps,myMoney,wants,message}){
+  if(targetId!==myId)return; // Only show chip-in to the targeted player(s)
+  const chipper=gs?.players.find(p=>p.id===chipFromId);
+  const dp=pos=>gs?.board[pos]?`${cityLabel(gs.board[pos])}`:`#${pos}`;
+  
+  let wantsSections="";
+  Object.entries(wants).forEach(([wantFromId,offer])=>{
+    const wantFrom=gs?.players.find(p=>p.id===wantFromId);
+    wantsSections+=`<div style="flex:1;background:var(--bg);border-radius:8px;padding:.5rem">
+      <div style="font-size:.66rem;color:var(--muted)">Want from ${wantFrom?.name||"?"}</div>
+      <div style="font-size:.76rem">${offer.props?.map(dp).join(", ")||"nothing"}</div>
+      ${offer.money?`<div style="color:var(--green)">+${CUR()}${offer.money}</div>`:""}
+    </div>`;
+  });
+  
+  qid("tin-c").innerHTML=`
+    <h2>💡 Chip-in from <span style="color:${chipper?.color||"var(--teal)"}">${chipFromName||chipper?.name||"?"}</span></h2>
+    ${message?`<div style="background:var(--bg);border-radius:6px;padding:.4rem;font-size:.76rem;margin-bottom:.5rem;font-style:italic">"${message}"</div>`:""}
+    <div style="display:flex;gap:.6rem;flex-wrap:wrap;margin:.6rem 0">
+      <div style="flex:1;background:var(--bg);border-radius:8px;padding:.5rem">
+        <div style="font-size:.66rem;color:var(--muted)">${chipFromName||chipper?.name||"?"} gives</div>
+        <div style="font-size:.76rem">${myProps?.map(dp).join(", ")||"nothing"}</div>
+        ${myMoney?`<div style="color:var(--green)">+${CUR()}${myMoney}</div>`:""}
+      </div>
+      ${wantsSections}
+    </div>
+    <div style="display:flex;gap:.4rem;flex-wrap:wrap">
+      <button class="btn btn-acc" onclick="socket.emit('trade_chip_approve',{tradeId:'${tradeId}',chipFromId:'${chipFromId}',approved:true})">✅ Accept Offer</button>
+      <button class="btn btn-red" onclick="socket.emit('trade_chip_approve',{tradeId:'${tradeId}',chipFromId:'${chipFromId}',approved:false})">❌ Reject</button>
+    </div>`;
+  om("m-t-in");
+}
+
+function handleChipResponse({tradeId,responderId,chipFromId,approved}){
+  const responder=gs?.players.find(p=>p.id===responderId);
+  if(chipFromId!==myId)return; // Only show to the chipper
+  
+  const msg=approved?`✅ ${responder?.name||"?"} approved your chip-in offer!`:`❌ ${responder?.name||"?"} rejected your chip-in offer.`;
+  toast(msg);
 }
 
 /* ─── BANK PANEL ─────────────────────────────────────────── */
@@ -1490,19 +1682,26 @@ function showPropModal(pos){
   if(!gs)return;
   const sp=gs.board[pos];
   if(!sp||["go","jail","free_parking","go_to_jail"].includes(sp.type))return;
+  const me=gs.players.find(p=>p.id===myId);
   const own=sp.owner?gs.players.find(p=>p.id===sp.owner):null;
   const gi=sp.group?parseInt(sp.group.slice(1)):-1;
   const gc=gi>=0?GRP_COLORS[gi]:"#666";
   const hasSet=hasPropertyFullSet(gs,sp);
   const setBonusOn=gs.settings?.doubleRentOnSet!==false;
+  const isOwnedByMe=!!(own&&me&&own.id===myId);
+  const hasLandedOnTile=(me?.position===pos);
+  const canViewTileFinancials=true;
   let rH="";
-  if(sp.type==="property"&&sp.rents){
+  if(sp.type==="property"&&sp.rents&&canViewTileFinancials){
     const lbls=["Base","1🏠","2🏠","3🏠","4🏠","🏨"];
     rH=`<table class="rtbl"><tr><th>Level</th><th>Rent</th></tr>${sp.rents.map((r,i)=>`<tr class="${(sp.houses||0)===i?"rhl":""}"><td>${lbls[i]}</td><td>${CUR()}${hasSet&&setBonusOn&&i===0?`<b style="color:var(--accent)">${r*2}</b> <span style='color:var(--muted);font-size:.7em'>×2 SET</span>`:r}</td></tr>`).join("")}</table>`;
   }
-  if(sp.type==="airport")rH=`<table class="rtbl"><tr><th>Owned Airports</th><th>Rent</th></tr><tr><td>1</td><td>${CUR()}100</td></tr><tr><td>2</td><td>${CUR()}200</td></tr></table>`;
-  if(sp.type==="railway")rH=`<table class="rtbl"><tr><th>Railways</th><th>Fee</th></tr>${[1,2,3,4].map(n=>`<tr><td>${n}</td><td>${CUR()}${25*Math.pow(2,n-1)}</td></tr>`).join("")}</table>`;
-  const me=gs.players.find(p=>p.id===myId);
+  if(sp.type==="airport"&&canViewTileFinancials)rH=`<table class="rtbl"><tr><th>Owned Airports</th><th>Rent</th></tr><tr><td>1</td><td>${CUR()}100</td></tr><tr><td>2</td><td>${CUR()}200</td></tr></table>`;
+  if(sp.type==="railway"&&canViewTileFinancials)rH=`<table class="rtbl"><tr><th>Railways</th><th>Fee</th></tr>${[1,2,3,4].map(n=>`<tr><td>${n}</td><td>${CUR()}${25*Math.pow(2,n-1)}</td></tr>`).join("")}</table>`;
+  if(sp.type==="utility"&&canViewTileFinancials){const cnt=gs.board.filter(s=>s.type==="utility"&&s.owner===sp.owner).length;rH=`<table class="rtbl"><tr><th>Utilities Owned</th><th>Rent Formula</th></tr><tr><td>1</td><td>${CUR()}<b>Dice × 4</b></td></tr><tr><td>2</td><td>${CUR()}<b>Dice × 10</b></td></tr></table>`;}
+  if(["property","airport","railway","utility"].includes(sp.type)&&!canViewTileFinancials){
+    rH=`<div style="margin-top:.35rem;padding:.45rem;border:1px solid var(--border);border-radius:8px;background:var(--bg);font-size:.74rem;color:var(--muted)">🔒 Rent/transport details unlock after you land on this tile or own it.</div>`;
+  }
   const isMyTurn=gs.players[gs.currentPlayerIdx]?.id===myId;
   const isBuyPhase=gs.phase==="buy"&&me?.position===pos&&gs.players[gs.currentPlayerIdx]?.id===myId;
   const cc=me?.creditCard;
@@ -1650,7 +1849,7 @@ function showBuildModal(){
 }
 function showMortModal(){
   const me=gs.players.find(p=>p.id===myId);
-  const myProps=gs.board.filter(s=>["property","airport","railway"].includes(s.type)&&s.owner===me.id);
+  const myProps=gs.board.filter(s=>["property","airport","railway","utility"].includes(s.type)&&s.owner===me.id);
   qid("mort-c").innerHTML=`<h2>🔒 Mortgage</h2>
     <div style="display:flex;flex-direction:column;gap:.3rem">
       ${myProps.map(s=>{
@@ -1668,19 +1867,7 @@ function showMortModal(){
   om("m-mort");
 }
 
-/* ─── WIN SCREEN ─────────────────────────────────────────── */
-function showWin(wid){
-  const w=gs?.players.find(p=>p.id===wid);if(!w)return;
-  const avImg=drawAvatarSVG(w.avatar||{},80);
-  qid("win-c").innerHTML=`<div style="text-align:center;padding:2rem">
-    <div style="font-size:3rem;margin-bottom:.5rem">🏆</div>
-    <img src="${avImg}" width="80" height="80" style="border-radius:50%;border:4px solid ${w.color};margin-bottom:.5rem;animation:bounce .5s ease infinite alternate">
-    <h2 style="color:${w.color};font-size:1.8rem">${w.name} Wins!</h2>
-    <p style="color:var(--muted)">Final: ${CUR()}${w.money}</p>
-    <button class="btn btn-acc" style="margin-top:1rem" onclick="location.reload()">🎲 Play Again</button>
-  </div>`;
-  om("m-win");launchConfetti();
-}
+/* ─── WIN SCREEN (overridden below) ────────────────── */
 
 /* ─── CONFETTI ───────────────────────────────────────────── */
 function launchConfetti(){
@@ -1890,6 +2077,22 @@ function applyLobbyBoardChange(){
 function applyRequestedBoardChange(requestId,kind,from,to){
   if(!_isLobbyHost)return;
   socket.emit("apply_board_change",{requestId,kind,from,to});
+}
+
+function openLobbyPlayersModal(){
+  const src=qid("lobby-players");
+  const dst=qid("lobby-players-view");
+  if(!src||!dst){toast("Players list unavailable right now.");return;}
+  dst.innerHTML=src.innerHTML||"<div style='font-size:.78rem;color:var(--muted)'>No players yet.</div>";
+  om("m-lobby-players");
+}
+
+function openLobbySettingsModal(){
+  const src=qid("lobby-settings");
+  const dst=qid("lobby-settings-view");
+  if(!src||!dst){toast("Settings unavailable right now.");return;}
+  dst.innerHTML=src.innerHTML||"<div style='font-size:.78rem;color:var(--muted)'>No settings loaded.</div>";
+  om("m-lobby-settings");
 }
 
 function openSetup(){
@@ -3189,6 +3392,24 @@ function showWin(wid) {
   const w = gs?.players.find(p => p.id === wid); if (!w) return;
   const avImg = drawAvatarSVG(w.avatar || {}, 80);
   const isMe = wid === myId;
+  const isHost = myId === roomHostId;
+  
+  let buttons = "";
+  if (isHost) {
+    buttons = `
+      <div style="display:flex;flex-direction:column;gap:.4rem;width:100%">
+        <button class="btn btn-acc" onclick="socket.emit('restart_game',{});cm('m-win')">🎲 Play Same Board</button>
+        <button class="btn btn-blu" onclick="showPostGameBoardSelect()">🗺️ Choose Different Board</button>
+        <button class="btn btn-red" onclick="quitGame()">❌ Quit & Home</button>
+      </div>`;
+  } else {
+    buttons = `
+      <div style="display:flex;flex-direction:column;gap:.4rem;width:100%">
+        <button class="btn btn-muted" disabled style="opacity:.5">🎲 Host Chooses Board</button>
+        <button class="btn btn-red" onclick="quitGame()">❌ Quit & Home</button>
+      </div>`;
+  }
+  
   qid("win-c").innerHTML = `
     <div style="text-align:center;padding:2rem">
       <div style="font-size:3rem;margin-bottom:.5rem">${isMe ? "🏆" : "🎉"}</div>
@@ -3196,11 +3417,45 @@ function showWin(wid) {
       <h2 style="color:${w.color};font-size:1.8rem">${w.name} Wins!</h2>
       <p style="color:var(--muted)">Final: ${CUR()}${w.money}</p>
       ${!isMe ? `<p style="color:var(--muted);font-size:.82rem;margin-top:.3rem">You finished as spectator</p>` : ""}
-      <div style="display:flex;gap:.5rem;justify-content:center;margin-top:1rem">
-        <button class="btn btn-acc" onclick="location.reload()">🎲 Play Again</button>
+      <div style="display:flex;gap:.5rem;justify-content:center;margin-top:1.2rem;flex-direction:column;align-items:center">
+        ${buttons}
       </div>
     </div>`;
   om("m-win"); launchConfetti();
+}
+
+/* ─── POST-GAME CONTROLS ─────────────────────────────────── */
+function quitGame(){
+  try{localStorage.removeItem("mono_game_session");}catch(e){}
+  socket.disconnect();
+  location.href="/";
+}
+
+function showPostGameBoardSelect(){
+  const div=qid("board-select-c");
+  if(!div)return;
+  div.innerHTML=`
+    <h2>🗺️ Select Board</h2>
+    <p style="color:var(--muted);font-size:.8rem;margin-bottom:1rem">Choose a different board for the next game</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.6rem;max-height:400px;overflow-y:auto">
+      <button class="board-opt-btn" onclick="_selectBoardType('standard')">📋 Standard</button>
+      <button class="board-opt-btn" onclick="_selectBoardType('random')">🎲 Random</button>
+      <button class="board-opt-btn" onclick="_selectBoardType('worldwide')">🌍 Mr. Worldwide</button>
+      <button class="board-opt-btn" onclick="_selectBoardType('india')">🇮🇳 India</button>
+      <button class="board-opt-btn" onclick="_selectBoardType('uk')">🇬🇧 UK</button>
+      <button class="board-opt-btn" onclick="_selectBoardType('usa')">🇺🇸 USA</button>
+    </div>
+    <button class="btn btn-out" style="width:100%;margin-top:.5rem" onclick="cm('m-board-select')">Close</button>`;
+  om("m-board-select");
+}
+
+function _selectBoardType(type){
+  curBoardType=type;
+  _doCreateRoom({skipJoin:true,boardOnly:true}).then(mapConfig=>{
+    if(!mapConfig||!myRoomId)return;
+    socket.emit("select_board",{roomId:myRoomId,mapConfig,settings:{}});
+  }).catch(e=>console.error("Board selection error:",e));
+  cm("m-board-select");
 }
 
 /* ── AUGMENT initSocket with connectivity handlers ── */

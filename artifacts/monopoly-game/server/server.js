@@ -48,12 +48,16 @@ const playerSid = new Map();
 const reconnectTimers = new Map();
 /** @type {Map<string, ReturnType<typeof setTimeout>>} */
 const auctionTimers = new Map();
+/** @type {Map<string, ReturnType<typeof setTimeout>>} */
+const turnTimers = new Map();
+const activeTrades = new Map(); // Track active trades per room: {tradeId -> {roomId, fromId, toId, offer, timestamp, participants}}
 
 const TOKENS = ["🎩","🚗","🐕","🚢","🛸","🎲","⚓","🏆"];
 const COLORS  = ["#e74c3c","#3b82f6","#22c55e","#f97316","#a855f7","#14b8a6","#f59e0b","#ec4899"];
 const SEED_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const RECONNECT_GRACE = 120;
 const VOTEKICK_THRESHOLD = 0.6;
+const TURN_TIMEOUT_MS = 5 * 60 * 1000;
 const DOMESTIC_PRESETS = new Set(["india", "uk", "usa"]);
 
 function applyEdgeCountrySetRule(spaces, opts = {}) {
@@ -706,6 +710,16 @@ function enforceRequestedUtilityAndTopSet(spaces) {
   const total = board.length;
   const C = Math.floor(total / 4);
   if (C < 6) return board;
+  const S = C - 1;
+  const scaffold = E.generateDefaultBoard(S);
+
+  const sideOfPos = (pos) => {
+    if (pos > 0 && pos < C) return "north";
+    if (pos > C && pos < 2 * C) return "east";
+    if (pos > 2 * C && pos < 3 * C) return "south";
+    if (pos > 3 * C && pos < 4 * C) return "west";
+    return "corner";
+  };
 
   const toUtility = (pos, name) => {
     if (pos <= 0 || pos >= total || pos % C === 0) return;
@@ -729,10 +743,40 @@ function enforceRequestedUtilityAndTopSet(spaces) {
     };
   };
 
-  const topFourthFromStart = 4;
-  const westFourthDownFromStart = (4 * C) - 4;
-  toUtility(topFourthFromStart, "Electric Company");
-  toUtility(westFourthDownFromStart, "Water Company");
+  const toCityTile = (pos) => {
+    if (pos <= 0 || pos >= total || pos % C === 0) return;
+    const fallback = scaffold[pos];
+    if (fallback?.type === "property") {
+      board[pos] = { ...fallback, pos };
+      return;
+    }
+    board[pos] = {
+      pos,
+      type: "property",
+      group: "g0",
+      name: `City ${pos}`,
+      countryCode: "",
+      countryFlag: "",
+      countryName: "",
+      price: 120,
+      rents: [12, 36, 72, 144, 220, 320],
+      houseCost: 60,
+      houses: 0,
+      owner: null,
+      mortgaged: false,
+    };
+  };
+
+  const northFourthFromStart = 4;
+  const southFourthFromCorner = (2 * C) + 4;
+
+  for (let pos = 0; pos < board.length; pos++) {
+    if (board[pos]?.type !== "utility") continue;
+    if (pos !== northFourthFromStart && pos !== southFourthFromCorner) toCityTile(pos);
+  }
+
+  toUtility(northFourthFromStart, "Electric Company");
+  toUtility(southFourthFromCorner, "Water Company");
 
   const northProps = board
     .filter((sp) => sp?.type === "property" && Number(sp.pos) > 0 && Number(sp.pos) < C)
@@ -961,6 +1005,68 @@ function activeCount(room) {
   return gs.players.filter(p => !p.bankrupted && !p.isSpectator && !p.disconnected).length;
 }
 
+function getActiveCompetitivePlayers(gs) {
+  if (!gs) return [];
+  return gs.players.filter(p => !p.bankrupted && !p.isSpectator && !p.disconnected);
+}
+
+function assignWinnerIfSingleActive(gs) {
+  if (!gs || gs.winner) return gs?.winner || null;
+  const active = getActiveCompetitivePlayers(gs);
+  if (active.length === 1) {
+    gs.winner = active[0].id;
+    gs.log.push(`🏆 ${active[0].name} wins (all other players are bankrupt or disconnected).`);
+  }
+  return gs.winner || null;
+}
+
+function cancelTurnTimer(rid) {
+  const t = turnTimers.get(rid);
+  if (t) {
+    clearTimeout(t);
+    turnTimers.delete(rid);
+  }
+}
+
+function resetTurnTimer(room, _reason = "turn") {
+  if (!room || room.phase !== "playing") return;
+  const gs = room.gameState;
+  if (!gs || gs.winner) return;
+  cancelTurnTimer(room.id);
+  gs.turnDeadline = Date.now() + TURN_TIMEOUT_MS;
+  const rid = room.id;
+  turnTimers.set(rid, setTimeout(() => {
+    turnTimers.delete(rid);
+    const liveRoom = rooms.get(rid);
+    if (!liveRoom || liveRoom.phase !== "playing" || !liveRoom.gameState) return;
+    const st = liveRoom.gameState;
+    if (st.winner) return;
+    const actor = st.players[st.currentPlayerIdx || 0];
+    if (!actor || actor.bankrupted || actor.isSpectator || actor.disconnected) {
+      resetTurnTimer(liveRoom, "skip-invalid");
+      return;
+    }
+    actor.isSpectator = true;
+    actor.disconnected = false;
+    actor.reconnectDeadline = null;
+    if (!liveRoom.spectators) liveRoom.spectators = [];
+    liveRoom.spectators.push({ id: actor.id, name: actor.name, reason: "turn-timeout" });
+    st.log.push(`⏱️ ${actor.name} removed for inactivity (no roll/end turn within 5 minutes).`);
+    E.nextTurn(st);
+    assignWinnerIfSingleActive(st);
+    io.to(rid).emit("state_update", { gameState: st });
+    io.to(rid).emit("player_timeout", { playerId: actor.id, name: actor.name, reason: "turn-timeout" });
+    if (st.winner) {
+      liveRoom.phase = "ended";
+      cancelAuctionTimer(rid);
+      cancelTurnTimer(rid);
+      io.to(rid).emit("game_over", { winnerId: st.winner });
+      return;
+    }
+    resetTurnTimer(liveRoom, "post-timeout");
+  }, TURN_TIMEOUT_MS));
+}
+
 // ─── Reconnect timer ──────────────────────────────────
 function startReconnect(rid, playerId) {
   const old = reconnectTimers.get(playerId);
@@ -978,8 +1084,17 @@ function startReconnect(rid, playerId) {
         gs.log.push(`⏱️ ${gp.name} timed out → spectator.`);
         const cur = gs.players[gs.currentPlayerIdx || 0];
         if (cur.id === playerId) E.nextTurn(gs);
+        assignWinnerIfSingleActive(gs);
         io.to(rid).emit("state_update", {gameState:gs});
         io.to(rid).emit("player_timeout", {playerId,name:gp.name});
+        if (gs.winner) {
+          room.phase = "ended";
+          cancelAuctionTimer(rid);
+          cancelTurnTimer(rid);
+          io.to(rid).emit("game_over", {winnerId:gs.winner});
+          return;
+        }
+        resetTurnTimer(room, "reconnect-timeout");
       }
     } else {
       room.players = room.players.filter(p => p.id !== playerId);
@@ -1009,7 +1124,11 @@ function resetAuctionTimer(rid, pos) {
     E.doAuctionEnd(gs);
     io.to(rid).emit("state_update", {gameState:gs});
     io.to(rid).emit("auction_ended", {pos});
-    if (gs.winner) { room.phase = "ended"; io.to(rid).emit("game_over", {winnerId:gs.winner}); }
+    if (gs.winner) {
+      room.phase = "ended";
+      cancelTurnTimer(rid);
+      io.to(rid).emit("game_over", {winnerId:gs.winner});
+    }
   }, 10000));
 }
 
@@ -1027,6 +1146,14 @@ function broadcastCount() {
 io.on("connection", (socket) => {
   broadcastCount();
 
+  const fmtTradeOffer = (offer = {}) => {
+    const fromProps = Array.isArray(offer.fromProps) ? offer.fromProps : [];
+    const toProps = Array.isArray(offer.toProps) ? offer.toProps : [];
+    const fromMoney = Number(offer.fromMoney || 0);
+    const toMoney = Number(offer.toMoney || 0);
+    return `fromProps=[${fromProps.join(",")}] toProps=[${toProps.join(",")}] fromMoney=${fromMoney} toMoney=${toMoney}`;
+  };
+
   socket.on("disconnect", () => {
     const room = roomOf(socket.id);
     sidRoom.delete(socket.id);
@@ -1039,12 +1166,19 @@ io.on("connection", (socket) => {
 
     if (room.phase === "lobby") {
       room.players = room.players.filter(p => p.sid !== socket.id);
-      if (!room.players.length) { rooms.delete(rid); broadcastCount(); return; }
+      if (!room.players.length) { cancelTurnTimer(rid); rooms.delete(rid); broadcastCount(); return; }
       if (room.hostId === (playerId || socket.id)) {
         room.hostId = room.players[0].id; room.players[0].isHost = true;
       }
       io.to(rid).emit("lobby_update", lobbyPayload(room));
     } else {
+      // Reassign host if needed (even during game/ended)
+      if (room.hostId === (playerId || socket.id) && room.players.length > 0) {
+        const activePlayers = room.players.filter(p => p.sid && p.sid !== socket.id);
+        if (activePlayers.length > 0) {
+          room.hostId = activePlayers[Math.floor(Math.random() * activePlayers.length)].id;
+        }
+      }
       const gs = room.gameState;
       const player_id = playerId || socket.id;
       if (gs) {
@@ -1052,9 +1186,20 @@ io.on("connection", (socket) => {
         if (gp && !gp.bankrupted && !gp.isSpectator) {
           gp.disconnected = true; gp.reconnectDeadline = Date.now()/1000 + RECONNECT_GRACE;
           gs.log.push(`📴 ${gp.name} disconnected — ${RECONNECT_GRACE}s grace.`);
-          startReconnect(rid, player_id);
           const cur = gs.players[gs.currentPlayerIdx || 0];
           if (cur.id === player_id && ["roll","action","buy"].includes(gs.phase)) E.nextTurn(gs);
+          assignWinnerIfSingleActive(gs);
+          if (gs.winner) {
+            room.phase = "ended";
+            cancelAuctionTimer(rid);
+            cancelTurnTimer(rid);
+            io.to(rid).emit("state_update", {gameState:gs});
+            io.to(rid).emit("game_over", {winnerId:gs.winner});
+            broadcastCount();
+            return;
+          }
+          startReconnect(rid, player_id);
+          resetTurnTimer(room, "disconnect");
           io.to(rid).emit("state_update", {gameState:gs});
           io.to(rid).emit("player_disconnected", {
             playerId:player_id, name:gp.name,
@@ -1288,6 +1433,7 @@ io.on("connection", (socket) => {
     room.phase = "playing";
     room.gameState = E.initGame(room);
     io.to(room.id).emit("game_started", {gameState:room.gameState});
+    resetTurnTimer(room, "game-start");
   });
 
   socket.on("game_action", (data) => {
@@ -1300,11 +1446,23 @@ io.on("connection", (socket) => {
     if (gs.currentPlayerIdx !== pi) return;
     data = data || {};
     const action = sanitize(data.action || "", 30);
+    const prevCurrentIdx = gs.currentPlayerIdx;
+    const prevRoll = Array.isArray(gs.lastRoll) ? `${gs.lastRoll[0]}-${gs.lastRoll[1]}` : "";
     room.gameState = E.processAction(gs, pi, action, data.data || {});
     const gs2 = room.gameState;
+    assignWinnerIfSingleActive(gs2);
     io.to(room.id).emit("state_update", {gameState:gs2});
     if (gs2.phase === "auction" && gs2.auction && gs2.auction.active) resetAuctionTimer(room.id, gs2.auction.pos);
-    if (gs2.winner) { room.phase = "ended"; cancelAuctionTimer(room.id); io.to(room.id).emit("game_over", {winnerId:gs2.winner}); }
+    const nextRoll = Array.isArray(gs2.lastRoll) ? `${gs2.lastRoll[0]}-${gs2.lastRoll[1]}` : "";
+    const rolledNow = action === "roll" && nextRoll && nextRoll !== prevRoll;
+    const turnAdvanced = gs2.currentPlayerIdx !== prevCurrentIdx;
+    if (turnAdvanced || rolledNow) resetTurnTimer(room, rolledNow ? "roll" : "turn-advance");
+    if (gs2.winner) {
+      room.phase = "ended";
+      cancelAuctionTimer(room.id);
+      cancelTurnTimer(room.id);
+      io.to(room.id).emit("game_over", {winnerId:gs2.winner});
+    }
   });
 
   socket.on("auction_bid", (data) => {
@@ -1359,10 +1517,19 @@ io.on("connection", (socket) => {
       gs.log.push(`🚫 ${targetP.name} was vote-kicked.`);
       const cur = gs.players[gs.currentPlayerIdx || 0];
       if (cur.id === targetId) E.nextTurn(gs);
+      assignWinnerIfSingleActive(gs);
       const kickedSid = playerSid.get(targetId);
       if (kickedSid) io.to(kickedSid).emit("you_were_kicked", {roomId:room.id,gameState:gs});
       io.to(room.id).emit("player_kicked", {playerId:targetId,name:targetP.name});
       io.to(room.id).emit("state_update", {gameState:gs});
+      if (gs.winner) {
+        room.phase = "ended";
+        cancelAuctionTimer(room.id);
+        cancelTurnTimer(room.id);
+        io.to(room.id).emit("game_over", {winnerId:gs.winner});
+      } else {
+        resetTurnTimer(room, "votekick");
+      }
     }
   });
 
@@ -1380,9 +1547,24 @@ io.on("connection", (socket) => {
     if (!room || room.phase !== "playing") return;
     data = data || {};
     const playerId = pid(socket.id);
+    const tradeId = randomUUID();
+    const gs = room.gameState;
+    const fromPlayer = findGp(gs, playerId);
+    const toPlayer = findGp(gs, data.toPlayerId);
+    if (!fromPlayer || !toPlayer || fromPlayer.id === toPlayer.id) return;
+    
+    // Store trade for visibility
+    activeTrades.set(tradeId, {
+      tradeId, roomId: room.id, fromId: playerId, toId: data.toPlayerId,
+      fromName: fromPlayer?.name || "?", toName: toPlayer?.name || "?",
+      offer: data.offer || {}, timestamp: Date.now(), participants: [playerId, data.toPlayerId]
+    });
+    
+    // Broadcast to ALL players with all details
     io.to(room.id).emit("trade_incoming", {
-      tradeId:randomUUID(), fromId:playerId,
-      toId:data.toPlayerId, offer:data.offer||{},
+      tradeId, fromId: playerId, fromName: fromPlayer?.name || "?",
+      toId: data.toPlayerId, toName: toPlayer?.name || "?",
+      offer: data.offer || {}, isPrivate: false
     });
   });
 
@@ -1390,13 +1572,24 @@ io.on("connection", (socket) => {
     const room = roomOf(socket.id); if (!room) return;
     data = data || {};
     const playerId = pid(socket.id);
-    if (!data.accepted) { io.to(room.id).emit("trade_declined", {tradeId:data.tradeId}); return; }
+    const trade = activeTrades.get(data.tradeId);
+    if (!trade || trade.roomId !== room.id) return;
+    if (trade.toId !== playerId) return;
+
+    if (!data.accepted) {
+      activeTrades.delete(data.tradeId);
+      io.to(room.id).emit("trade_declined", {tradeId:data.tradeId});
+      return;
+    }
+
     const gs = room.gameState;
-    const fid = data.fromId;
+    const fid = trade.fromId;
     const fi = gs.players.findIndex(p => p.id === fid);
     const ti = gs.players.findIndex(p => p.id === playerId);
     if (fi === -1 || ti === -1) return;
-    E.execTrade(gs, fi, ti, data.offer || {});
+    console.log(`[TRADE_EXEC] room=${room.id} type=direct tradeId=${data.tradeId} from=${trade.fromName || fid} to=${trade.toName || playerId} ${fmtTradeOffer(trade.offer || {})}`);
+    E.execTrade(gs, fi, ti, trade.offer || {});
+    activeTrades.delete(data.tradeId);
     io.to(room.id).emit("state_update", {gameState:gs});
     io.to(room.id).emit("trade_accepted", {tradeId:data.tradeId});
   });
@@ -1405,10 +1598,107 @@ io.on("connection", (socket) => {
     const room = roomOf(socket.id); if (!room) return;
     data = data || {};
     const playerId = pid(socket.id);
+    const trade = activeTrades.get(data.tradeId);
+    if (!trade || trade.roomId !== room.id) return;
+    if (playerId !== trade.fromId && playerId !== trade.toId) return;
+    if (data.toId !== trade.fromId && data.toId !== trade.toId) return;
+    if (data.toId === playerId) return;
+
+    const gs = room.gameState;
+    const fromPlayer = findGp(gs, playerId);
+    const toPlayer = findGp(gs, data.toId);
+    if (!fromPlayer || !toPlayer) return;
+
+    trade.fromId = playerId;
+    trade.toId = data.toId;
+    trade.fromName = fromPlayer.name || "?";
+    trade.toName = toPlayer.name || "?";
+    trade.offer = data.offer || {};
+    trade.updatedAt = Date.now();
+
     io.to(room.id).emit("trade_negotiate", {
       tradeId:data.tradeId, fromId:playerId,
       toId:data.toId, offer:data.offer||{},
       message:sanitize(data.message||"", 200),
+    });
+  });
+
+  socket.on("trade_chip_in", (data) => {
+    const room = roomOf(socket.id); if (!room) return;
+    data = data || {};
+    const playerId = pid(socket.id);
+    const tradeId = data.tradeId;
+    const trade = activeTrades.get(tradeId);
+    if (!trade) return;
+    
+    const gs = room.gameState;
+    const player = findGp(gs, playerId);
+    const targetIds = data.targetIds || [];
+    
+    // Initialize chipIns array if not exists
+    if (!trade.chipIns) trade.chipIns = [];
+    
+    // Store this chip-in offer with targets
+    trade.chipIns.push({
+      chipFromId: playerId, chipFromName: player?.name || "?",
+      targetIds: targetIds,
+      myProps: data.myProps || [],
+      myMoney: data.myMoney || 0,
+      wants: data.wants || {},
+      message: sanitize(data.message || "", 200),
+      timestamp: Date.now(),
+      status: "pending"
+    });
+    
+    // Broadcast chip-in to the players who were targeted
+    targetIds.forEach(targetId => {
+      io.to(room.id).emit("trade_chip_in", {
+        tradeId, chipFromId: playerId, chipFromName: player?.name || "?",
+        targetId: targetId, targetName: gs.players.find(p => p.id === targetId)?.name || "?",
+        myProps: data.myProps || [], myMoney: data.myMoney || 0,
+        wants: data.wants || {}, message: sanitize(data.message || "", 200)
+      });
+    });
+  });
+
+  socket.on("trade_chip_approve", (data) => {
+    // Original parties approve/deny chip-in offer
+    const room = roomOf(socket.id); if (!room) return;
+    data = data || {};
+    const playerId = pid(socket.id);
+    const trade = activeTrades.get(data.tradeId);
+
+    if (data.approved && trade && Array.isArray(trade.chipIns)) {
+      const chip = [...trade.chipIns]
+        .reverse()
+        .find(ci => ci.chipFromId === data.chipFromId && (ci.targetIds || []).includes(playerId) && ci.status !== "executed");
+
+      if (chip) {
+        const gs = room.gameState;
+        const fi = gs.players.findIndex(p => p.id === data.chipFromId);
+        const ti = gs.players.findIndex(p => p.id === playerId);
+        if (fi !== -1 && ti !== -1) {
+          const want = (chip.wants || {})[playerId] || {props:[], money:0};
+          const offer = {
+            fromProps: chip.myProps || [],
+            toProps: want.props || [],
+            fromMoney: chip.myMoney || 0,
+            toMoney: want.money || 0,
+          };
+          const fromName = gs.players[fi]?.name || data.chipFromId;
+          const toName = gs.players[ti]?.name || playerId;
+          console.log(`[TRADE_EXEC] room=${room.id} type=chipin tradeId=${data.tradeId} from=${fromName} to=${toName} ${fmtTradeOffer(offer)}`);
+          E.execTrade(gs, fi, ti, offer);
+          chip.status = "executed";
+          chip.executedBy = playerId;
+          io.to(room.id).emit("state_update", {gameState:gs});
+        }
+      }
+    }
+    
+    io.to(room.id).emit("trade_chip_response", {
+      tradeId: data.tradeId, responderId: playerId,
+      chipFromId: data.chipFromId, approved: data.approved || false
     });
   });
 
@@ -1431,6 +1721,36 @@ io.on("connection", (socket) => {
     room.chatLog.push(msg);
     if (room.chatLog.length > 100) room.chatLog = room.chatLog.slice(-80);
     io.to(room.id).emit("chat_msg", msg);
+  });
+
+  socket.on("restart_game", (data) => {
+    const room = roomOf(socket.id);
+    if (!room || room.phase !== "ended" || room.hostId !== pid(socket.id)) return;
+    data = data || {};
+    
+    // Reset game with same mapConfig
+    const mapConfig = room.mapConfig || normalizeMapConfig({});
+    room.gameState = E.initGame({players:room.players, settings:room.settings, mapConfig});
+    room.phase = "playing";
+    room.votes = {};
+    
+    io.to(room.id).emit("game_started", {gameState:room.gameState});
+    resetTurnTimer(room, "game_restart");
+  });
+
+  socket.on("select_board", (data) => {
+    const room = roomOf(socket.id);
+    if (!room || room.phase !== "ended" || room.hostId !== pid(socket.id)) return;
+    data = data || {};
+    
+    // Store new mapConfig for next game
+    if (data.mapConfig) {
+      room.mapConfig = data.mapConfig;
+      room.settings = Object.assign(room.settings || {}, data.settings || {});
+    }
+    
+    // Phase stays "ended" - await restart_game or another select_board
+    io.to(room.id).emit("board_selected", {mapConfig:room.mapConfig});
   });
 });
 
@@ -1517,7 +1837,11 @@ app.get("/favicon.ico", (_req, res) => res.status(204).end());
 setInterval(() => {
   const cutoff = Date.now()/1000 - 14400;
   for (const [rid, room] of rooms) {
-    if (room.createdAt < cutoff) rooms.delete(rid);
+    if (room.createdAt < cutoff) {
+      cancelAuctionTimer(rid);
+      cancelTurnTimer(rid);
+      rooms.delete(rid);
+    }
   }
 }, 3_600_000);
 

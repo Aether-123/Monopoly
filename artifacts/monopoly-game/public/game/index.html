@@ -298,8 +298,11 @@
     </div>
   </div>
   <div style="display:flex;gap:.55rem;flex-wrap:wrap;justify-content:center">
+    <button class="btn btn-out" id="lobby-players-btn" onclick="openLobbyPlayersModal()">👥 Players</button>
+    <button class="btn btn-out" id="lobby-settings-btn" onclick="openLobbySettingsModal()">📋 Settings</button>
     <button class="btn btn-out" id="rules-btn" onclick="openSetup()">⚙️ Rules</button>
     <button class="btn btn-acc" id="start-btn" onclick="startGame()" style="display:none">▶ Start Game</button>
+    <button class="btn btn-red" onclick="quitGame()">❌ Quit</button>
   </div>
   <div id="lobby-start-min-note" style="font-size:.74rem;color:var(--text-dim);text-align:center;margin-top:.35rem"></div>
   <div class="lbox" style="width:100%;max-width:500px">
@@ -404,12 +407,19 @@
 <div class="ov ovh" id="m-surp">   <div class="modal"><button class="mc" onclick="handleSurpriseClose()">✕</button><div id="surp-c"></div></div></div>
 <div class="ov ovh" id="m-gov">    <div class="modal"><button class="mc" onclick="ga('gov_ack');cm('m-gov')">✕</button><div id="gov-c"></div></div></div>
 <div class="ov ovh" id="m-win">    <div class="modal"><div id="win-c"></div></div></div>
+<div class="ov ovh" id="m-board-select"><div class="modal"><button class="mc" onclick="cm('m-board-select')">✕</button><div id="board-select-c"></div></div></div>
 <div class="ov ovh" id="m-t-in">   <div class="modal wide"><button class="mc" onclick="declineTrade()">✕</button><div id="tin-c"></div></div></div>
+<div class="ov ovh" id="m-trade-compose"><div class="modal wide"><button class="mc" onclick="cm('m-trade-compose')">✕</button><h2>💱 Trade</h2><div id="trade-compose-c"></div></div></div>
 <div class="ov ovh" id="m-neg">    <div class="modal wide"><button class="mc" onclick="cm('m-neg')">✕</button><h2>🔄 Counter Offer</h2><div id="neg-c"></div></div></div>
+<div class="ov ovh" id="m-chip">   <div class="modal xwide"><button class="mc" onclick="cm('m-chip')">✕</button><h2>💡 Chip In</h2><div id="chip-c"></div></div></div>
+<div class="ov ovh" id="m-chip-target"><div class="modal"><button class="mc" onclick="cm('m-chip-target')">✕</button><h2>🎯 Select Players</h2><div id="chip-target-c"></div></div></div>
 <div class="ov ovh" id="m-browse"> <div class="modal wide"><button class="mc" onclick="closeBrowse()">✕</button><h2>🔍 Browse Games</h2><div id="browse-c"></div></div></div>
 <div class="ov ovh" id="m-auction"><div class="modal wide"><div id="auction-c"></div></div></div>
 
 <div class="ov ovh" id="m-votekick"><div class="modal"><button class="mc" onclick="cm('m-votekick')">✕</button><div id="votekick-c"></div></div></div>
+
+<div class="ov ovh" id="m-lobby-players"><div class="modal"><button class="mc" onclick="cm('m-lobby-players')">✕</button><h2>👥 Players</h2><div id="lobby-players-view"></div></div></div>
+<div class="ov ovh" id="m-lobby-settings"><div class="modal"><button class="mc" onclick="cm('m-lobby-settings')">✕</button><h2>📋 Settings</h2><div id="lobby-settings-view"></div></div></div>
 
 <div class="ov ovh" id="m-bank">
   <div class="modal xwide">

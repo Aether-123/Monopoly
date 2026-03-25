@@ -295,7 +295,7 @@ export function initGame(room) {
     ? rawBoard.map((sp, idx) => ({ ...(sp || {}), pos: idx }))
     : enforceBoardLayoutConstraints(rawBoard, S);
   const board = enforceEastTaxGovPattern(baseBoard);
-  const players = room.players.map(p => mkGamePlayer(p, room.settings));
+  const players = shuffle(room.players.map(p => mkGamePlayer(p, room.settings)));
   const startPos = board.find(s => s.type === "go")?.pos ?? 0;
   players.forEach(pl => { pl.position = startPos; });
   const purchasableTypes = new Set(["property", "utility", "airport", "railway"]);
@@ -330,7 +330,7 @@ export function initGame(room) {
     board, players, tilesPerSide: S,
     currentPlayerIdx: 0, phase: "roll",
     lastRoll: null, doublesCount: 0,
-    log: [`🎲 Game started! ${players[0].name} goes first.`],
+    log: [`🎲 Game started! ${players[0].name} goes first.`, `🎲 Turn order: ${players.map(p => p.name).join(" → ")}`],
     settings: { ...room.settings },
     chanceDeck, chestDeck, chanceIdx: 0, chestIdx: 0, winner: null,
     startPos,
@@ -437,6 +437,11 @@ function recordCardDraw(p, text) {
 function doRoll(gs, idx) {
   if (gs.phase !== "roll") return;
   const p = gs.players[idx];
+  if ((p.money || 0) < 0) {
+    gs.log.push(`⚠️ ${p.name} cannot roll with negative balance.`);
+    gs.phase = "action";
+    return;
+  }
   accrueInterest(gs, idx);
   const d1 = rnd6(), d2 = rnd6();
   const doubles = d1 === d2;
@@ -1192,7 +1197,7 @@ export function nextTurn(gs) {
   let loops = 0;
   while (loops < gs.players.length * 2) {
     const np = gs.players[n];
-    if (np.bankrupted) {
+    if (np.bankrupted || np.disconnected || np.isSpectator) {
       n = (n + 1) % gs.players.length;
       loops++;
       continue;
@@ -1206,11 +1211,13 @@ export function nextTurn(gs) {
     }
     break;
   }
+  const chosen = gs.players[n];
+  if (!chosen || chosen.bankrupted || chosen.disconnected || chosen.isSpectator) return;
   if (gs.players[n]) gs.players[n].turnDoublesCount = 0;
   Object.assign(gs, {currentPlayerIdx:n, phase:"roll", doublesCount:0});
   gs.turnInRound++;
-  const alive = gs.players.filter(p => !p.bankrupted);
-  if (gs.turnInRound >= alive.length) {
+  const alive = gs.players.filter(p => !p.bankrupted && !p.disconnected && !p.isSpectator);
+  if (alive.length > 0 && gs.turnInRound >= alive.length) {
     gs.round++; gs.turnInRound = 0;
     // Rotate hazard zone at the end of each complete round (after all players go)
     const hzPool = gs.hazardPool.filter(p => p !== gs.hazardPos);
