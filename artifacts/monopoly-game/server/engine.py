@@ -428,6 +428,8 @@ def apply_round_economy(gs):
         if p.get("bankDeposit",0) > 0:
             intr = math.floor(p["bankDeposit"]*(s["depositRate"]/100))
             p["bankDepositInterest"] += intr
+            if intr > 0:
+                gs["log"].append(f"🏦 {p['name']} deposit interest +{s['currency']}{intr}")
         dead = []
         for loan in p.get("loans",[]):
             intr = math.ceil(loan["remaining"]*(s["loanRate"]/100))
@@ -439,9 +441,7 @@ def apply_round_economy(gs):
         p["loans"] = [l for l in p.get("loans",[]) if l not in dead]
         cc = p.get("creditCard")
         if cc and cc.get("active"):
-            cc["roundsLeft"] -= 1
-            if cc["roundsLeft"] <= 0 and cc.get("used",0) > 0:
-                enforce_credit_debt(gs, i)
+            auto_pay_credit_emi(gs, i, "round")
 
 def end_round_on_start(gs):
     gs["round"] = gs.get("round",1) + 1
@@ -455,18 +455,39 @@ def end_round_on_start(gs):
             gs["taxReturnPos"] = random.choice(pool2)
             gs["taxReturnLastMoved"] = gs["round"]
 
-def resolve_start_landing(gs, idx):
+def refresh_credit_rounds_left(cc):
+    if not cc or not cc.get("active"):
+        return
+    emi = max(1, int(cc.get("emi", 0) or 1))
+    cc["roundsLeft"] = max(0, math.ceil((cc.get("used", 0) or 0) / emi))
+
+def auto_pay_credit_emi(gs, idx, source="round"):
     p = gs["players"][idx]
+    cc = p.get("creditCard")
+    if not cc or not cc.get("active") or cc.get("used",0) <= 0:
+        return {"due":0,"paid":0,"remaining":0,"defaulted":False}
+    due = min(cc.get("emi",0), cc.get("used",0))
+    paid = min(due, max(0, p.get("money",0)))
+    if paid > 0:
+        p["money"] -= paid
+        cc["used"] -= paid
+        gs["log"].append(f"💳 {p['name']} auto-paid EMI {gs['settings']['currency']}{paid} ({source}).")
+    if cc.get("used",0) <= 0:
+        p["creditCard"] = None
+        return {"due":due,"paid":paid,"remaining":0,"defaulted":False}
+    refresh_credit_rounds_left(cc)
+    if paid < due:
+        enforce_credit_debt(gs, idx)
+        return {"due":due,"paid":paid,"remaining":cc.get("used",0),"defaulted":True}
+    return {"due":due,"paid":paid,"remaining":cc.get("used",0),"defaulted":False}
+
+def resolve_start_landing(gs, idx):
     end_round_on_start(gs)
     bonus_pct = float(gs["settings"].get("startTileBonusPercent", 0) or 0)
     bonus = max(0, math.floor((gs["settings"].get("goSalary", 0) or 0) * (bonus_pct / 100)))
     if bonus > 0:
         earn_money(gs, idx, bonus, f"START tile bonus ({bonus_pct:g}%)")
-    cc = p.get("creditCard")
-    if cc and cc.get("active") and cc.get("used",0) > 0:
-        gs["phase"] = "go_prompt"
-        gs["pendingEvent"] = {"type":"go_prompt","emi":min(cc.get("emi",0),cc.get("used",0))}
-        return
+    gs["pendingEvent"] = None
     gs["phase"] = "action"
 
 def land_on(gs, idx):
@@ -702,11 +723,13 @@ def do_buy(gs, idx, data):
     if use_credit:
         if not cc or not cc.get("active") or cc_room < sp["price"]: gs["phase"]="action"; return
         cc["used"] = cc.get("used",0) + sp["price"]
+        refresh_credit_rounds_left(cc)
     else:
         if p["money"]+cc_room<sp["price"]: gs["phase"]="action"; return
         if p["money"]>=sp["price"]: p["money"]-=sp["price"]
         else:
             fc=sp["price"]-p["money"]; cc["used"]=cc.get("used",0)+fc; p["money"]=0
+            refresh_credit_rounds_left(cc)
     sp["owner"]=p["id"]; p["properties"].append(p["position"])
     gs["log"].append(f"🏠 {p['name']} bought {sp['name']} for {gs['settings']['currency']}{sp['price']}")
     gs["phase"]="action"
@@ -714,6 +737,17 @@ def do_buy(gs, idx, data):
 def do_end_turn(gs, idx):
     p=gs["players"][idx]; last=gs.get("lastRoll") or []
     if gs.get("phase") == "buy":
+        sp = gs["board"][p["position"]]
+        purch = bool(sp and not sp.get("owner") and sp.get("type") in ("property","utility","airport","railway"))
+        cc = p.get("creditCard")
+        cc_room = (cc.get("limit",0)-cc.get("used",0)) if cc and cc.get("active") else 0
+        can_afford = purch and ((p.get("money",0) + cc_room) >= sp.get("price",0))
+        if purch and not can_afford:
+            do_start_auction(gs, idx, {})
+            if gs.get("phase") == "auction":
+                return
+            next_turn(gs)
+            return
         gs["log"].append(f"⚠️ {p['name']} must buy or auction this property.")
         return
     if len(last)==2 and last[0]==last[1] and not p["inJail"] and not p["badDebt"]:
@@ -805,11 +839,8 @@ def do_travel_rail(gs, idx, data):
     gs["phase"]="action"
 
 def do_go_pay_emi(gs, idx):
-    if idx!=gs.get("currentPlayerIdx") or gs.get("phase")!="go_prompt": return
-    p=gs["players"][idx]; cc=p.get("creditCard")
-    if cc and cc.get("active") and cc.get("used",0)>0:
-        emi=min(cc["emi"],cc.get("used",0),p["money"]); p["money"]-=emi; cc["used"]-=emi
-        if cc["used"]<=0: p["creditCard"]=None
+    if idx!=gs.get("currentPlayerIdx"): return
+    auto_pay_credit_emi(gs, idx, "manual")
     gs["pendingEvent"]=None; gs["phase"]="action"
 
 # ═══════════════════════════════════════════════════════
@@ -854,15 +885,12 @@ def do_bank_credit(gs, idx, data):
     if p["money"]<fee: return
     limit=gs["settings"].get("creditCardLimit",500); ten=max(data.get("tenure",6),3)
     p["money"]-=fee
-    p["creditCard"]={"active":True,"used":0,"limit":limit,"emi":math.ceil(limit/ten),"tenure":ten,"paidTurns":0,"roundsLeft":gs["settings"].get("creditCardRounds",2)}
+    p["creditCard"]={"active":True,"used":0,"limit":limit,"emi":math.ceil(limit/ten),"tenure":ten,"paidTurns":0,"roundsLeft":0}
+    refresh_credit_rounds_left(p["creditCard"])
 
 def do_bank_pay_emi(gs, idx):
-    if idx!=gs.get("currentPlayerIdx") or gs.get("phase")!="go_prompt": return
-    p=gs["players"][idx]; cc=p.get("creditCard")
-    if not cc or not cc.get("active") or cc.get("used",0)<=0: return
-    emi=min(cc["emi"],cc.get("used",0),p["money"]); p["money"]-=emi; cc["used"]-=emi
-    if emi<=0: return
-    if cc["used"]<=0: p["creditCard"]=None
+    if idx!=gs.get("currentPlayerIdx"): return
+    auto_pay_credit_emi(gs, idx, "manual")
 
 def do_bank_foreclose_loans(gs, idx):
     if idx!=gs.get("currentPlayerIdx"): return

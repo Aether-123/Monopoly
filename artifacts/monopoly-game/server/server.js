@@ -1868,7 +1868,11 @@ io.on("connection", (socket) => {
     const nextRoll = Array.isArray(gs2.lastRoll) ? `${gs2.lastRoll[0]}-${gs2.lastRoll[1]}` : "";
     const rolledNow = action === "roll" && nextRoll && nextRoll !== prevRoll;
     const turnAdvanced = gs2.currentPlayerIdx !== prevCurrentIdx;
-    if (turnAdvanced || rolledNow) resetTurnTimer(room, rolledNow ? "roll" : "turn-advance");
+    const actorStillCurrent = gs.currentPlayerIdx === pi && gs2.currentPlayerIdx === pi;
+    if (turnAdvanced || rolledNow || actorStillCurrent) {
+      const reason = turnAdvanced ? "turn-advance" : rolledNow ? "roll" : "player-action";
+      resetTurnTimer(room, reason);
+    }
     if (gs2.winner) {
       room.phase = "ended";
       cancelAuctionTimer(room.id);
@@ -1887,7 +1891,10 @@ io.on("connection", (socket) => {
     if (pi === -1 || gs.players[pi].isSpectator) return;
     const prev = gs.auction.currentBid;
     E.doAuctionBid(gs, pi, data || {});
-    if (gs.auction && gs.auction.currentBid > prev) resetAuctionTimer(room.id, gs.auction.pos);
+    if (gs.auction && gs.auction.currentBid > prev) {
+      resetAuctionTimer(room.id, gs.auction.pos);
+      resetTurnTimer(room, "auction-activity");
+    }
     io.to(room.id).emit("state_update", {gameState:gs});
   });
 
@@ -1901,6 +1908,7 @@ io.on("connection", (socket) => {
     if (pi === -1) return;
     E.doAuctionFold(gs, pi);
     if (!gs.auction) cancelAuctionTimer(room.id);
+    resetTurnTimer(room, "auction-activity");
     io.to(room.id).emit("state_update", {gameState:gs});
   });
 

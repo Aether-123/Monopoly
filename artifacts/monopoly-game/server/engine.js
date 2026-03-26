@@ -587,10 +587,7 @@ function applyRoundEconomy(gs) {
     }
     p.loans = p.loans.filter(l => !deadLoans.includes(l));
     const cc = p.creditCard;
-    if (cc && cc.active) {
-      cc.roundsLeft -= 1;
-      if (cc.roundsLeft <= 0 && (cc.used || 0) > 0) enforceCreditDebt(gs, i);
-    }
+    if (cc && cc.active) autoPayCreditEmi(gs, i, "round");
   }
 }
 
@@ -609,18 +606,41 @@ function endRoundOnStart(gs) {
   }
 }
 
-function resolveStartLanding(gs, idx) {
+function refreshCreditRoundsLeft(cc) {
+  if (!cc || !cc.active) return;
+  const emi = Math.max(1, Number(cc.emi) || 1);
+  cc.roundsLeft = Math.max(0, Math.ceil((cc.used || 0) / emi));
+}
+
+function autoPayCreditEmi(gs, idx, source = "round") {
   const p = gs.players[idx];
+  const cc = p?.creditCard;
+  if (!cc || !cc.active || (cc.used || 0) <= 0) return { due: 0, paid: 0, remaining: 0, defaulted: false };
+  const due = Math.min(cc.emi || 0, cc.used || 0);
+  const paid = Math.min(due, Math.max(0, p.money || 0));
+  if (paid > 0) {
+    p.money -= paid;
+    cc.used -= paid;
+    gs.log.push(`💳 ${p.name} auto-paid EMI ${gs.settings.currency}${paid} (${source}).`);
+  }
+  if ((cc.used || 0) <= 0) {
+    p.creditCard = null;
+    return { due, paid, remaining: 0, defaulted: false };
+  }
+  refreshCreditRoundsLeft(cc);
+  if (paid < due) {
+    enforceCreditDebt(gs, idx);
+    return { due, paid, remaining: cc.used || 0, defaulted: true };
+  }
+  return { due, paid, remaining: cc.used || 0, defaulted: false };
+}
+
+function resolveStartLanding(gs, idx) {
   endRoundOnStart(gs);
   const bonusPct = Number(gs.settings.startTileBonusPercent || 0);
   const bonus = Math.max(0, Math.floor((gs.settings.goSalary || 0) * (bonusPct / 100)));
   if (bonus > 0) earnMoney(gs, idx, bonus, `START tile bonus (${bonusPct}%)`);
-  const cc = p.creditCard;
-  if (cc && cc.active && (cc.used || 0) > 0) {
-    gs.phase = "go_prompt";
-    gs.pendingEvent = { type: "go_prompt", emi: Math.min(cc.emi, cc.used || 0) };
-    return;
-  }
+  gs.pendingEvent = null;
   gs.phase = "action";
 }
 
@@ -980,10 +1000,16 @@ function doBuy(gs, idx, data = {}) {
   if (useCredit) {
     if (!cc || !cc.active || ccRoom < sp.price) { gs.phase = "action"; return; }
     cc.used = (cc.used || 0) + sp.price;
+    refreshCreditRoundsLeft(cc);
   } else {
     if (p.money + ccRoom < sp.price) { gs.phase = "action"; return; }
     if (p.money >= sp.price) p.money -= sp.price;
-    else { const fc = sp.price - p.money; cc.used = (cc.used||0) + fc; p.money = 0; }
+    else {
+      const fc = sp.price - p.money;
+      cc.used = (cc.used||0) + fc;
+      p.money = 0;
+      refreshCreditRoundsLeft(cc);
+    }
   }
   sp.owner = p.id; p.properties.push(p.position);
   gs.log.push(`🏠 ${p.name} bought ${sp.name} for ${gs.settings.currency}${sp.price}${useCredit ? " (credit card)" : ""}`);
@@ -993,6 +1019,17 @@ function doBuy(gs, idx, data = {}) {
 function doEndTurn(gs, idx) {
   const p = gs.players[idx]; const last = gs.lastRoll || [];
   if (gs.phase === "buy") {
+    const sp = gs.board[p.position];
+    const purch = !!(sp && !sp.owner && ["property","utility","airport","railway"].includes(sp.type));
+    const cc = p.creditCard;
+    const ccRoom = (cc && cc.active) ? (cc.limit - (cc.used || 0)) : 0;
+    const canAfford = purch && ((p.money || 0) + ccRoom >= (sp.price || 0));
+    if (purch && !canAfford) {
+      doStartAuction(gs, idx, {});
+      if (gs.phase === "auction") return;
+      nextTurn(gs);
+      return;
+    }
     gs.log.push(`⚠️ ${p.name} must buy or auction this property.`);
     return;
   }
@@ -1125,12 +1162,8 @@ function doTravelRail(gs, idx, data) {
 }
 
 function doGoPayEmi(gs, idx) {
-  if (idx !== gs.currentPlayerIdx || gs.phase !== "go_prompt") return;
-  const p = gs.players[idx]; const cc = p.creditCard;
-  if (cc && cc.active && (cc.used||0) > 0) {
-    const emi = Math.min(cc.emi, cc.used||0, p.money); p.money -= emi; cc.used -= emi;
-    if (cc.used <= 0) p.creditCard = null;
-  }
+  if (idx !== gs.currentPlayerIdx) return;
+  autoPayCreditEmi(gs, idx, "manual");
   gs.pendingEvent = null;
   gs.phase = "action";
 }
@@ -1192,18 +1225,14 @@ function doBankCredit(gs, idx, data) {
   const limit = gs.settings.creditCardLimit || 500;
   const ten = Math.max(data.tenure || 6, 3);
   p.money -= fee;
-  p.creditCard = {active:true,used:0,limit,emi:Math.ceil(limit/ten),tenure:ten,paidTurns:0,roundsLeft:gs.settings.creditCardRounds||2};
+  p.creditCard = {active:true,used:0,limit,emi:Math.ceil(limit/ten),tenure:ten,paidTurns:0,roundsLeft:0};
+  refreshCreditRoundsLeft(p.creditCard);
   gs.log.push(`💳 ${p.name} activated credit card (limit ${gs.settings.currency}${limit}).`);
 }
 
 function doBankPayEmi(gs, idx) {
-  if (idx !== gs.currentPlayerIdx || gs.phase !== "go_prompt") return;
-  const p = gs.players[idx]; const cc = p.creditCard;
-  if (!cc || !cc.active || (cc.used||0) <= 0) return;
-  const emi = Math.min(cc.emi, cc.used||0, p.money); p.money -= emi; cc.used -= emi;
-  if (emi <= 0) return;
-  if (cc.used <= 0) p.creditCard = null;
-  gs.log.push(`💳 ${p.name} paid EMI ${gs.settings.currency}${emi}.`);
+  if (idx !== gs.currentPlayerIdx) return;
+  autoPayCreditEmi(gs, idx, "manual");
 }
 
 function doBankForecloseLoans(gs, idx) {

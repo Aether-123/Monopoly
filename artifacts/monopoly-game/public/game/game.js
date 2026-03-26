@@ -1335,7 +1335,7 @@ function renderBankPanel(){
     ${((me.loans||[]).reduce((a,l)=>a+(l.remaining||0),0)>0&&me.money>=(me.loans||[]).reduce((a,l)=>a+(l.remaining||0),0))?`<button class="btn btn-sm btn-red" style="margin-top:.3rem;width:100%" onclick="ga('bank_foreclose_loans')">Foreclose All Loans</button>`:""}`;
   qid("bm-cc").innerHTML=me.creditCard?.active?`
     <div style="font-size:.72rem"><div style="display:flex;justify-content:space-between"><span>Used</span><b>${cur}${me.creditCard.used}/${cur}${me.creditCard.limit}</b></div><div style="display:flex;justify-content:space-between"><span>EMI</span><b>${cur}${me.creditCard.emi}/GO</b></div><div style="display:flex;justify-content:space-between"><span>Rounds</span><b>${Math.ceil(me.creditCard.roundsLeft)}</b></div></div>
-    <div style="font-size:.65rem;color:var(--muted);margin-top:.22rem">EMI is payable when you land on START each round.</div>
+    <div style="font-size:.65rem;color:var(--muted);margin-top:.22rem">EMI is auto-deducted on START each round.</div>
     ${(me.creditCard.used||0)>0&&me.money>=(me.creditCard.used||0)?`<button class="btn btn-sm btn-red" style="width:100%;margin-top:.22rem" onclick="ga('bank_foreclose_credit')">Foreclose Card ${cur}${me.creditCard.used}</button>`:""}
     ${(me.creditCard.used||0)<=0?`<button class="btn btn-sm btn-out" style="width:100%;margin-top:.22rem" onclick="ga('bank_surrender_credit')">Surrender Card</button>`:""}`:`
     <div style="font-size:.7rem;color:var(--muted);margin-bottom:.28rem">Fee: ${cur}${s.creditCardFee} · Limit: ${cur}${s.creditCardLimit}</div>
@@ -1440,7 +1440,7 @@ function renderBankModal(){
       <div class="bk-stat"><span class="bk-stat-lbl">Rounds Left</span><span class="bk-stat-val">${Math.ceil(cc.roundsLeft||0)}</span></div>
     </div>
     <div class="bk-cc-bar-wrap"><div class="bk-cc-bar" style="width:${Math.min(100,Math.round(cc.used/cc.limit*100))}%"></div></div>
-    <div class="bk-note" style="margin-top:.6rem">EMI is payable on START once per round.</div>
+    <div class="bk-note" style="margin-top:.6rem">EMI is auto-deducted on START once per round.</div>
     ${(cc.used||0)>0&&me.money>=(cc.used||0)?`<button class="btn btn-red" style="width:100%;margin-top:.45rem" onclick="ga('bank_foreclose_credit');renderBankModal()">Foreclose Credit Card — ${cur}${cc.used}</button>`:""}
     ${(cc.used||0)<=0?`<button class="btn btn-out" style="width:100%;margin-top:.45rem" onclick="ga('bank_surrender_credit');renderBankModal()">Surrender Credit Card</button>`:""}`:`
     <div class="bk-cc-empty">
@@ -1602,8 +1602,7 @@ function _renderActionsCore(){
   if(gs.phase==="rail_travel")h+=`<button class="btn btn-out" style="border-color:#8d6e63;color:#bcaaa4" onclick="showRailModal()">🚂 Ride (${CUR()}${gs.settings.railwayFee||75})</button><button class="btn btn-out" onclick="ga('skip_travel')">Stay</button>`;
   if(gs.phase==="go_prompt"&&gs.pendingEvent){
     const emi=gs.pendingEvent.emi||0;
-    h+=`<div class="turn-box"><b>Landed on START!</b>${emi?`<br>💳 EMI due this round: ${CUR()}${emi}`:""}</div>`;
-    if(emi)h+=`<button class="btn btn-acc" onclick="ga('go_pay_emi')">Pay ${CUR()}${emi}</button>`;
+    h+=`<div class="turn-box"><b>Landed on START!</b>${emi?`<br>💳 EMI auto-deducted this round: ${CUR()}${emi}`:""}</div>`;
     h+=`<button class="btn btn-out" onclick="ga('go_end')">Continue</button>`;
   }
   if(["hazard_event","gov_prot_event","surprise_event"].includes(gs.phase))
