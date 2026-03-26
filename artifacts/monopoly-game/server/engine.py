@@ -142,7 +142,7 @@ COUNTRIES = [
     {"code":"au","name":"Australia","flag":"🇦🇺","tier":4,"base":240,
      "cities":["Townsville","Cairns","Hobart","Geelong","Sunshine Coast","Wollongong","Logan City","Newcastle","Gold Coast","Adelaide","Canberra","Brisbane","Perth","Melbourne","Sydney Eastern"]},
     {"code":"fr","name":"France","flag":"🇫🇷","tier":4,"base":240,
-     "cities":["Saint-Etienne","Le Havre","Reims","Toulon","Rennes","Strasbourg","Montpellier","Bordeaux","Nantes","Lille","Lyon","Nice","Marseille","Paris 10e","Paris 16e"]},
+     "cities":["Saint-Etienne","Le Havre","Reims","Toulon","Rennes","Strasbourg","Montpellier","Bordeaux","Nantes","Lille","Lyon","Nice","Marseille","Paris"]},
     # ── TIER 5 — Very High Income (GDP/cap $45-65k) ──────────────────────────
     # Tier 5: base 280-360, cities range ~$280-$500
     {"code":"de","name":"Germany","flag":"🇩🇪","tier":5,"base":280,

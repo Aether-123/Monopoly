@@ -187,9 +187,11 @@ button { cursor: pointer; }
 .country-name { font-weight: 600; font-size: .78rem; flex: 1; }
 .country-tier { font-size: .64rem; color: var(--muted); }
 .country-arrow { font-size: .62rem; color: var(--muted); }
-.country-cities { display: flex; flex-wrap: wrap; gap: .22rem; padding: .28rem .35rem .35rem 1.8rem; animation: expandDown .25s ease; }
+.country-cities { padding: .28rem .35rem .35rem 1.8rem; animation: expandDown .25s ease; }
+.country-city-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .22rem; }
+.country-city-actions { grid-column: 1 / -1; }
 @keyframes expandDown { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
-.city-chip { padding: .16rem .42rem; border-radius: 12px; font-size: .66rem; cursor: pointer; background: var(--bg); border: 1px solid var(--border); color: var(--muted); transition: .12s; user-select: none; }
+.city-chip { display: block; width: 100%; box-sizing: border-box; padding: .16rem .42rem; border-radius: 12px; font-size: .66rem; cursor: pointer; background: var(--bg); border: 1px solid var(--border); color: var(--muted); transition: .12s; user-select: none; text-align: center; }
 .city-chip.sel { background: var(--accent); color: #000; border-color: var(--accent); }
 .city-chip:hover:not(.sel) { border-color: var(--accent)88; color: var(--text); }
 .lbox { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: .85rem; flex: 1; min-width: 210px; }

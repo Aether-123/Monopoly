@@ -2392,8 +2392,10 @@ async function renderWorldwidePanel(){
         <span class="country-arrow" id="warr-${c.code}">▶</span>
       </div>
       <div class="country-cities" id="wcities-${c.code}" style="display:none">
-        ${c.cities.map(city=>`<span class="city-chip ${(wwSelectedCities[c.code]||[]).includes(city)?"sel":""}" onclick="toggleWWCity('${c.code}','${city}',this)">${city}</span>`).join("")}
-        <div style="margin-top:.28rem;display:flex;gap:.2rem">
+        <div class="country-city-grid">
+          ${c.cities.map(city=>`<span class="city-chip ${(wwSelectedCities[c.code]||[]).includes(city)?"sel":""}" onclick="toggleWWCity('${c.code}','${city}',this)">${city}</span>`).join("")}
+        </div>
+        <div class="country-city-actions" style="margin-top:.28rem;display:flex;gap:.2rem">
           <button type="button" class="btn btn-sm btn-out" style="font-size:.62rem" onclick="event.stopPropagation();wwSelectCountry('${c.code}')">All</button>
           <button type="button" class="btn btn-sm btn-out" style="font-size:.62rem" onclick="event.stopPropagation();wwClearCountry('${c.code}')">None</button>
         </div>

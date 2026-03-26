@@ -20,7 +20,7 @@ const COUNTRY_DATA = {
   russia:{iso:"ru",cities:["Volgograd","Perm","Voronezh","Krasnoyarsk","Ufa","Rostov-on-Don","Omsk","Samara","Chelyabinsk","Nizhny Novgorod","Kazan","Yekaterinburg","Novosibirsk","Moscow","Saint Petersburg"]},
   canada:{iso:"ca",cities:["Regina","Saskatoon","Winnipeg","Halifax","Quebec City","Edmonton","Hamilton","Ottawa","London ON","Victoria","Kitchener","Calgary","Montreal","Toronto","Vancouver West Side"]},
   australia:{iso:"au",cities:["Townsville","Cairns","Hobart","Geelong","Sunshine Coast","Wollongong","Logan City","Newcastle","Gold Coast","Adelaide","Canberra","Brisbane","Perth","Melbourne","Sydney Eastern"]},
-  france:{iso:"fr",cities:["Saint-Etienne","Le Havre","Reims","Toulon","Rennes","Strasbourg","Montpellier","Bordeaux","Nantes","Lille","Lyon","Nice","Marseille","Paris 10e","Paris 16e"]},
+  france:{iso:"fr",cities:["Saint-Etienne","Le Havre","Reims","Toulon","Rennes","Strasbourg","Montpellier","Bordeaux","Nantes","Lille","Lyon","Nice","Marseille","Paris"]},
   germany:{iso:"de",cities:["Duisburg","Dortmund","Essen","Nuremberg","Hanover","Leipzig","Dresden","Bremen","Stuttgart","Dusseldorf","Cologne","Frankfurt","Hamburg","Berlin Mitte","Munich Maxvorstadt"]},
   united_kingdom:{iso:"gb",cities:["Bradford","Belfast","Coventry","Leicester","Nottingham","Cardiff","Liverpool","Bristol","Edinburgh","Leeds","Sheffield","Birmingham","Manchester","London Canary Wharf","London Kensington"]},
   india:{iso:"in",cities:["Visakhapatnam","Nagpur","Kanpur","Lucknow","Surat","Jaipur","Ahmedabad","Pune","Kolkata","Chennai","Hyderabad","Bangalore Whitefield","Delhi Connaught Place","Mumbai Bandra","Mumbai Nariman Point"]},
