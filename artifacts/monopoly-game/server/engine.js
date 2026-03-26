@@ -1635,71 +1635,22 @@ export function generateDefaultBoard(S) {
   const board = [];
   const standardByOrder = ["ng", "tr", "mx", "ru", "in", "jp", "us", "gb"];
   const countryByCode = new Map(COUNTRIES.map(c => [c.code, c]));
-  const cityCursorByCode = {};
-  const cityIndexByCountry = {};
-  
-  // Apply consistent country distribution for ALL boards:
-  // - Cheapest country gets 2 tiles
-  // - Most expensive country gets 2 tiles
-  // - Middle countries capped at max 3 tiles each
-  const totalProps = propSlots.length;
-  let propsConfig = [];
-  
-  // Always apply edge-2-city rule: first and last countries get 2 tiles each
-  propsConfig = [2];
-  const remaining = totalProps - 4;  // Remove 2+2 for edge countries
-  const middleCountries = standardByOrder.length - 2;  // Exclude first and last
-  
-  if (middleCountries > 0) {
-    const maxPerCountry = 3;  // Maximum tiles per country in the middle
-    const baseCount = Math.floor(remaining / middleCountries);
-    const capped = Math.min(baseCount, maxPerCountry);
-    const extra = remaining - (capped * middleCountries);
-    
-    for (let i = 0; i < middleCountries; i++) {
-      propsConfig.push(Math.min(capped + (i < extra ? 1 : 0), maxPerCountry));
-    }
-  }
-  propsConfig.push(2);
-  
-  // Trim excess if config exceeds available properties
-  let configTotal = propsConfig.reduce((a, b) => a + b, 0);
-  if (configTotal > totalProps) {
-    for (let i = propsConfig.length - 2; i > 0 && configTotal > totalProps; i--) {
-      if (propsConfig[i] > 1) { propsConfig[i]--; configTotal--; }
-    }
-  }
-  
-  let propertyOrder = 0;
-  let countryIdx = 0;
-  let propsInCurrentCountry = 0;
+  const cityCursorByGroup = {};
   
   for (let pos = 0; pos < total; pos++) {
     if (fixed.has(pos)) {
       board.push(fixed.get(pos));
     } else if (grpMap[pos] !== undefined) {
       const grp = grpMap[pos];
-      
-      // Assign country based on configured distribution
-      const countryCode = standardByOrder[countryIdx] || "";
+      const gi = Math.max(0, Math.min(7, Number.parseInt(String(grp).replace("g", ""), 10) || 0));
+      const countryCode = standardByOrder[gi] || standardByOrder[standardByOrder.length - 1];
       const country = countryByCode.get(countryCode);
-      const cityCursor = cityCursorByCode[countryCode] || 0;
+      const cityCursor = cityCursorByGroup[grp] || 0;
       const city = country ? country.cities[cityCursor % country.cities.length] : `Property ${pos}`;
-      cityCursorByCode[countryCode] = cityCursor + 1;
-      
-      // Use country's base price + increment for city position within country
-      const cityIdx = cityIndexByCountry[countryCode] || 0;
+      cityCursorByGroup[grp] = cityCursor + 1;
+
       const countryBase = country?.base || 60;
-      const price = countryBase + cityIdx * 10;
-      cityIndexByCountry[countryCode] = cityIdx + 1;
-      
-      propsInCurrentCountry++;
-      
-      // Move to next country when current country reaches its quota
-      if (propsInCurrentCountry >= propsConfig[countryIdx]) {
-        countryIdx++;
-        propsInCurrentCountry = 0;
-      }
+      const price = countryBase + cityCursor * 10;
       
       board.push({
         pos,
@@ -1716,7 +1667,6 @@ export function generateDefaultBoard(S) {
         owner:null,
         mortgaged:false
       });
-      propertyOrder++;
     }
     else board.push({pos,type:"chance",name:"❓ Surprise"});
   }
