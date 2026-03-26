@@ -609,6 +609,21 @@ function endRoundOnStart(gs) {
   }
 }
 
+function resolveStartLanding(gs, idx) {
+  const p = gs.players[idx];
+  endRoundOnStart(gs);
+  const bonusPct = Number(gs.settings.startTileBonusPercent || 0);
+  const bonus = Math.max(0, Math.floor((gs.settings.goSalary || 0) * (bonusPct / 100)));
+  if (bonus > 0) earnMoney(gs, idx, bonus, `START tile bonus (${bonusPct}%)`);
+  const cc = p.creditCard;
+  if (cc && cc.active && (cc.used || 0) > 0) {
+    gs.phase = "go_prompt";
+    gs.pendingEvent = { type: "go_prompt", emi: Math.min(cc.emi, cc.used || 0) };
+    return;
+  }
+  gs.phase = "action";
+}
+
 function landOn(gs, idx) {
   const p = gs.players[idx]; const sp = gs.board[p.position]; const pos = p.position;
   gs.log.push(`📍 ${p.name} → ${sp.name}`);
@@ -618,17 +633,8 @@ function landOn(gs, idx) {
   // This prevents position-based effects from overriding tile type logic
   if (t === "tax_return") { landTaxReturn(gs, idx); gs.phase = "action"; return; }
   if (t === "go") {
-    endRoundOnStart(gs);
-    const bonusPct = Number(gs.settings.startTileBonusPercent || 0);
-    const bonus = Math.max(0, Math.floor((gs.settings.goSalary || 0) * (bonusPct / 100)));
-    if (bonus > 0) earnMoney(gs, idx, bonus, `START tile bonus (${bonusPct}%)`);
-    const cc = p.creditCard;
-    if (cc && cc.active && (cc.used || 0) > 0) {
-      gs.phase = "go_prompt";
-      gs.pendingEvent = { type: "go_prompt", emi: Math.min(cc.emi, cc.used || 0) };
-      return;
-    }
-    gs.phase = "action";
+    resolveStartLanding(gs, idx);
+    return;
   }
   else if (t === "jail")           gs.phase = "action";
   else if (t === "free_parking") {
@@ -1109,7 +1115,13 @@ function doTravelRail(gs, idx, data) {
   chargeMoney(gs, idx, fee, "railway ride");
   if (gs.treasurePot !== null && gs.treasurePot !== undefined) gs.treasurePot = (gs.treasurePot||0) + fee;
   if ((cur.goBonus || []).includes(destPos)) earnMoney(gs, idx, gs.settings.goSalary, "railway GO bonus");
-  p.position = destPos; gs.log.push(`🚂 ${p.name} rode to ${gs.board[destPos]?.name || "railway"}`); gs.phase = "action";
+  p.position = destPos;
+  gs.log.push(`🚂 ${p.name} rode to ${gs.board[destPos]?.name || "railway"}`);
+  if (gs.board[destPos]?.type === "go") {
+    resolveStartLanding(gs, idx);
+    return;
+  }
+  gs.phase = "action";
 }
 
 function doGoPayEmi(gs, idx) {

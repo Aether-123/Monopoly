@@ -455,21 +455,27 @@ def end_round_on_start(gs):
             gs["taxReturnPos"] = random.choice(pool2)
             gs["taxReturnLastMoved"] = gs["round"]
 
+def resolve_start_landing(gs, idx):
+    p = gs["players"][idx]
+    end_round_on_start(gs)
+    bonus_pct = float(gs["settings"].get("startTileBonusPercent", 0) or 0)
+    bonus = max(0, math.floor((gs["settings"].get("goSalary", 0) or 0) * (bonus_pct / 100)))
+    if bonus > 0:
+        earn_money(gs, idx, bonus, f"START tile bonus ({bonus_pct:g}%)")
+    cc = p.get("creditCard")
+    if cc and cc.get("active") and cc.get("used",0) > 0:
+        gs["phase"] = "go_prompt"
+        gs["pendingEvent"] = {"type":"go_prompt","emi":min(cc.get("emi",0),cc.get("used",0))}
+        return
+    gs["phase"] = "action"
+
 def land_on(gs, idx):
     p = gs["players"][idx]; sp = gs["board"][p["position"]]; pos = p["position"]
     gs["log"].append(f"📍 {p['name']} → {sp['name']}")
-    if pos == gs["hazardPos"]:    apply_hazard(gs, idx); return
-    if pos == gs["taxReturnPos"]: land_tax_return(gs, idx); return
-    if pos == gs["randomTaxPos"]: land_random_tax(gs, idx); return
     t = sp.get("type"); s = gs["settings"]
     if t == "go":
-        end_round_on_start(gs)
-        cc = p.get("creditCard")
-        if cc and cc.get("active") and cc.get("used",0) > 0:
-            gs["phase"] = "go_prompt"
-            gs["pendingEvent"] = {"type":"go_prompt","emi":min(cc.get("emi",0),cc.get("used",0))}
-            return
-        gs["phase"] = "action"
+        resolve_start_landing(gs, idx)
+        return
     elif t == "jail": gs["phase"] = "action"
     elif t == "free_parking":
         pot = gs.get("treasurePot")
@@ -502,6 +508,9 @@ def land_on(gs, idx):
     elif t == "railway":
         if not sp.get("owner"): gs["phase"] = "buy"
         else: pay_railway_fee(gs, idx, sp); gs["phase"] = "rail_travel"
+    elif pos == gs["hazardPos"]:    apply_hazard(gs, idx); return
+    elif pos == gs["taxReturnPos"]: land_tax_return(gs, idx); return
+    elif pos == gs["randomTaxPos"]: land_random_tax(gs, idx); return
     else: gs["phase"] = "action"
 
 def pay_rent_check(gs, idx, sp):
@@ -788,7 +797,12 @@ def do_travel_rail(gs, idx, data):
     charge_money(gs, idx, fee, "railway ride")
     if gs.get("treasurePot") is not None: gs["treasurePot"]=(gs["treasurePot"] or 0)+fee
     if dest_pos in (cur.get("goBonus") or []): earn_money(gs, idx, gs["settings"]["goSalary"], "railway GO bonus")
-    p["position"]=dest_pos; gs["log"].append(f"🚂 {p['name']} rode to {gs['board'][dest_pos].get('name','railway')}"); gs["phase"]="action"
+    p["position"]=dest_pos
+    gs["log"].append(f"🚂 {p['name']} rode to {gs['board'][dest_pos].get('name','railway')}")
+    if gs["board"][dest_pos].get("type") == "go":
+        resolve_start_landing(gs, idx)
+        return
+    gs["phase"]="action"
 
 def do_go_pay_emi(gs, idx):
     if idx!=gs.get("currentPlayerIdx") or gs.get("phase")!="go_prompt": return

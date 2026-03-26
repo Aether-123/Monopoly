@@ -59,6 +59,7 @@ let editorCustomSpaces=null; // custom board from editor
 
 /* ─── HELPERS ──────────────────────────────────────────── */
 const CUR=()=>gs?.settings?.currency||"$";
+const moneyColor=v=>(Number(v)||0)<0?"var(--red)":"var(--green)";
 const DF=["⚀","⚁","⚂","⚃","⚄","⚅"];
 const GRP_COLORS=["#ef4444","#f97316","#22c55e","#3b82f6","#a855f7","#ec4899","#14b8a6","#6366f1"];
 const DICE_FACE_TRANSFORMS={
@@ -952,7 +953,7 @@ function renderTradePanel(){
   el.innerHTML=others.map(p=>`
     <div class="trade-prow ${_tradeTarget===p.id?"sel":""}" onclick="selectTradeTarget('${p.id}')">
       <div class="pp-dot" style="background:${p.color}"></div>
-      <div style="flex:1;font-size:.78rem"><b>${p.name}</b><br><span style="color:var(--muted)">${CUR()}${p.money}</span></div>
+      <div style="flex:1;font-size:.78rem"><b>${p.name}</b><br><span style="color:${moneyColor(p.money)}">${CUR()}${p.money}</span></div>
       <span style="font-size:.7rem;color:var(--muted)">${gs.board.filter(s=>s.owner===p.id).length}🏠</span>
     </div>`).join("");
 }
@@ -1731,9 +1732,24 @@ function confirmDeclareBankrupt(){
 }
 
 /* ─── PENDING EVENTS ─────────────────────────────────────── */
+function closePendingEventModals(){
+  cm("m-haz");
+  cm("m-surp");
+  cm("m-gov");
+}
+
 function handlePendingEvent(){
-  if(!gs?.pendingEvent)return;
+  if(!gs?.pendingEvent){
+    closePendingEventModals();
+    return;
+  }
   const ev=gs.pendingEvent;
+  const current=gs.players?.[gs.currentPlayerIdx];
+  const isMyTurn=!!(current&&current.id===myId);
+  if(!isMyTurn&&["hazard","surprise","gov_prot"].includes(ev.type)){
+    closePendingEventModals();
+    return;
+  }
   if(ev.type==="hazard")showHazardModal(ev);
   else if(ev.type==="surprise")showSurpriseModal(ev);
   if(ev.type==="gov_prot")showGovModal(ev);

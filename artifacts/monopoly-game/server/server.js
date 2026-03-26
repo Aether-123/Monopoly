@@ -1850,6 +1850,9 @@ io.on("connection", (socket) => {
       "bank_repay",
       "bank_credit",
       "bank_pay_emi",
+      "bank_foreclose_loans",
+      "bank_foreclose_credit",
+      "bank_surrender_credit",
       "bank_insurance",
       "claim_insurance",
     ]);
