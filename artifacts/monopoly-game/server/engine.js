@@ -16,7 +16,7 @@ const VERY_GOOD = [
 ];
 const VERY_BAD = [
   {title:"IRS AUDIT",icon:"😱",text:"7 years of tax irregularities. Pay $1500.",action:"pay",amount:1500},
-  {title:"IDENTITY THEFT",icon:"🦹",text:"Hacker drained everything. Pay $1500.",action:"pay",amount:1500},
+  {title:"IDENTITY THEFT",icon:"🦹",text:"Hacker drains 80% of your wallet cash.",action:"pay",walletPercentOfCash:80},
   {title:"PONZI SCHEME",icon:"📉",text:"Your broker was fraud. Lose $1500.",action:"pay",amount:1500},
   {title:"FLOODED BASEMENT",icon:"🌊",text:"Burst pipe destroyed everything. Pay $1500.",action:"pay",amount:1500},
 ];
@@ -83,7 +83,7 @@ const SURPRISE_CARDS = [
 const HAZARDS = [
   {id:"crash",    name:"Car Crash",    icon:"🚗💥",desc:"Pay $50 for repairs.",      type:"money",  amount:50},
   {id:"accident", name:"Accident",     icon:"🏥",  desc:"Hospital bill!",            type:"money",  amount:100},
-  {id:"robbery",  name:"Robbery!",     icon:"🔫",  desc:"Your wallet is stolen!",    type:"robbery"},
+  {id:"robbery",  name:"Robbery!",     icon:"🔫",  desc:"Lose 80% of your wallet cash!", type:"robbery"},
   {id:"quake",    name:"Earthquake!",  icon:"🌍💥",desc:"Houses demolished!",        type:"disaster"},
   {id:"cyclone",  name:"Cyclone!",     icon:"🌀",  desc:"Cyclone in city, $300 lost for relief efforts.", type:"money", amount:300},
   {id:"tsunami",  name:"Tsunami!",     icon:"🌊",  desc:"Property flooded.",         type:"disaster",fixed:1},
@@ -375,7 +375,7 @@ export function processAction(gs, pi, action, data) {
   const beforeMoney = gs.players.map(pl => pl.money || 0);
   switch (action) {
     case "roll":            doRoll(gs, pi); break;
-    case "buy":             doBuy(gs, pi); break;
+    case "buy":             doBuy(gs, pi, data); break;
     case "pass":            doEndTurn(gs, pi); break;
     case "end_turn":        doEndTurn(gs, pi); break;
     case "build":           doBuild(gs, pi, data); break;
@@ -389,13 +389,16 @@ export function processAction(gs, pi, action, data) {
     case "travel_rail":     doTravelRail(gs, pi, data); break;
     case "skip_travel":     gs.phase = "action"; break;
     case "go_pay_emi":      doGoPayEmi(gs, pi); break;
-    case "go_end":          landOn(gs, pi); break;
+    case "go_end":          gs.pendingEvent = null; gs.phase = "action"; break;
     case "bank_deposit":    doBankDeposit(gs, pi, data); break;
     case "bank_withdraw":   doBankWithdraw(gs, pi, data); break;
     case "bank_loan":       doBankLoan(gs, pi, data); break;
     case "bank_repay":      doBankRepay(gs, pi, data); break;
     case "bank_credit":     doBankCredit(gs, pi, data); break;
     case "bank_pay_emi":    doBankPayEmi(gs, pi); break;
+    case "bank_foreclose_loans": doBankForecloseLoans(gs, pi); break;
+    case "bank_foreclose_credit": doBankForecloseCredit(gs, pi); break;
+    case "bank_surrender_credit": doBankSurrenderCredit(gs, pi); break;
     case "bank_insurance":  doBankInsurance(gs, pi); break;
     case "claim_insurance": doClaimInsurance(gs, pi); break;
     case "hazard_ack":
@@ -444,7 +447,6 @@ function doRoll(gs, idx) {
     gs.phase = "action";
     return;
   }
-  accrueInterest(gs, idx);
   const d1 = rnd6(), d2 = rnd6();
   const doubles = d1 === d2;
   gs.lastRoll = [d1, d2];
@@ -558,13 +560,53 @@ function movePlayer(gs, idx, steps) {
       gs.log.push(`💰 ${gs.settings.currency}50 added to Treasure (passed GO).`);
     }
     if (p.hasInsurance) p.money -= gs.settings.insurancePremium;
-    const cc = p.creditCard;
-    if (cc && cc.active && (cc.used || 0) > 0) {
-      gs.phase = "go_prompt"; gs.pendingEvent = {type:"go_prompt",emi:cc.emi}; return;
-    }
   }
   landOn(gs, idx);
   p._passedGoSalaryThisMove = 0;
+}
+
+function applyRoundEconomy(gs) {
+  const s = gs.settings;
+  for (let i = 0; i < gs.players.length; i++) {
+    const p = gs.players[i];
+    if (!p || p.bankrupted || p.disconnected || p.isSpectator) continue;
+    if (p.bankDeposit > 0) {
+      const interest = Math.floor(p.bankDeposit * (s.depositRate / 100));
+      p.bankDepositInterest += interest;
+      if (interest > 0) gs.log.push(`🏦 ${p.name} deposit interest +${s.currency}${interest}`);
+    }
+    const deadLoans = [];
+    for (const loan of p.loans) {
+      const interest = Math.ceil(loan.remaining * (s.loanRate / 100));
+      loan.remaining += interest;
+      loan.turnsLeft -= 1;
+      if (loan.turnsLeft <= 0 && loan.remaining > 0) {
+        enforceBadDebt(gs, i, loan);
+        deadLoans.push(loan);
+      }
+    }
+    p.loans = p.loans.filter(l => !deadLoans.includes(l));
+    const cc = p.creditCard;
+    if (cc && cc.active) {
+      cc.roundsLeft -= 1;
+      if (cc.roundsLeft <= 0 && (cc.used || 0) > 0) enforceCreditDebt(gs, i);
+    }
+  }
+}
+
+function endRoundOnStart(gs) {
+  gs.round = (gs.round || 1) + 1;
+  gs.turnInRound = 0;
+  applyRoundEconomy(gs);
+  const hzPool = gs.hazardPool.filter(p => p !== gs.hazardPos);
+  if (hzPool.length) gs.hazardPos = pick(hzPool);
+  if (gs.round - gs.taxReturnLastMoved >= gs.settings.taxReturnMoveEvery) {
+    const pool2 = gs.taxReturnPool.filter(p => p !== gs.taxReturnPos);
+    if (pool2.length) {
+      gs.taxReturnPos = pick(pool2);
+      gs.taxReturnLastMoved = gs.round;
+    }
+  }
 }
 
 function landOn(gs, idx) {
@@ -576,9 +618,16 @@ function landOn(gs, idx) {
   // This prevents position-based effects from overriding tile type logic
   if (t === "tax_return") { landTaxReturn(gs, idx); gs.phase = "action"; return; }
   if (t === "go") {
+    endRoundOnStart(gs);
     const bonusPct = Number(gs.settings.startTileBonusPercent || 0);
     const bonus = Math.max(0, Math.floor((gs.settings.goSalary || 0) * (bonusPct / 100)));
     if (bonus > 0) earnMoney(gs, idx, bonus, `START tile bonus (${bonusPct}%)`);
+    const cc = p.creditCard;
+    if (cc && cc.active && (cc.used || 0) > 0) {
+      gs.phase = "go_prompt";
+      gs.pendingEvent = { type: "go_prompt", emi: Math.min(cc.emi, cc.used || 0) };
+      return;
+    }
     gs.phase = "action";
   }
   else if (t === "jail")           gs.phase = "action";
@@ -765,7 +814,7 @@ function applyHazard(gs, idx) {
     }
   }
   else if (haz.type === "money") { lostMoney = Math.min(haz.amount, p.money); p.money -= lostMoney; }
-  else if (haz.type === "robbery") { lostMoney = p.money; p.money = 0; }
+  else if (haz.type === "robbery") { lostMoney = Math.floor(Math.max(0, p.money) * 0.8); p.money -= lostMoney; }
   else if (haz.type === "disaster" || haz.type === "fire") {
     const owned = p.properties.map(pos => gs.board[pos]).filter(sp => (sp.houses || 0) > 0);
     if (haz.type === "fire") {
@@ -863,10 +912,18 @@ function applyCard(gs, idx, card, surprise) {
     }
   }
   else if (a === "pay") {
-    chargeMoney(gs, idx, card.amount, "card penalty");
+    let paidAmount = 0;
+    if (Number.isFinite(card.walletPercentOfCash) && card.walletPercentOfCash > 0) {
+      paidAmount = Math.floor(Math.max(0, p.money) * (card.walletPercentOfCash / 100));
+      p.money -= paidAmount;
+      gs.log.push(`💸 ${p.name} lost ${gs.settings.currency}${paidAmount} (card penalty).`);
+    } else {
+      paidAmount = Number(card.amount || 0);
+      chargeMoney(gs, idx, paidAmount, "card penalty");
+    }
     if (surprise && gs.treasurePot !== null && gs.treasurePot !== undefined) {
-      gs.treasurePot = (gs.treasurePot || 0) + (card.amount || 0);
-      gs.log.push(`💰 ${gs.settings.currency}${card.amount || 0} added to Treasure (surprise payment).`);
+      gs.treasurePot = (gs.treasurePot || 0) + paidAmount;
+      gs.log.push(`💰 ${gs.settings.currency}${paidAmount} added to Treasure (surprise payment).`);
     }
   }
   else if (a === "goto") {
@@ -907,17 +964,23 @@ function applyCard(gs, idx, card, surprise) {
 // ════════════════════════════════════════════════
 //  BUY / BUILD / MORTGAGE
 // ════════════════════════════════════════════════
-function doBuy(gs, idx) {
+function doBuy(gs, idx, data = {}) {
   const p = gs.players[idx]; const sp = gs.board[p.position];
   const mode = gs.settings?.auctionMode || "buy_pass";
   if (mode === "auction_only") return;
   if (!sp || sp.owner) { gs.phase = "action"; return; }
   const cc = p.creditCard; const ccRoom = (cc && cc.active) ? (cc.limit - (cc.used||0)) : 0;
-  if (p.money + ccRoom < sp.price) { gs.phase = "action"; return; }
-  if (p.money >= sp.price) p.money -= sp.price;
-  else { const fc = sp.price - p.money; cc.used = (cc.used||0) + fc; p.money = 0; }
+  const useCredit = !!data?.useCredit;
+  if (useCredit) {
+    if (!cc || !cc.active || ccRoom < sp.price) { gs.phase = "action"; return; }
+    cc.used = (cc.used || 0) + sp.price;
+  } else {
+    if (p.money + ccRoom < sp.price) { gs.phase = "action"; return; }
+    if (p.money >= sp.price) p.money -= sp.price;
+    else { const fc = sp.price - p.money; cc.used = (cc.used||0) + fc; p.money = 0; }
+  }
   sp.owner = p.id; p.properties.push(p.position);
-  gs.log.push(`🏠 ${p.name} bought ${sp.name} for ${gs.settings.currency}${sp.price}`);
+  gs.log.push(`🏠 ${p.name} bought ${sp.name} for ${gs.settings.currency}${sp.price}${useCredit ? " (credit card)" : ""}`);
   gs.phase = "action";
 }
 
@@ -967,8 +1030,8 @@ function doSellHouse(gs, idx, data) {
 }
 
 function doMortgage(gs, idx, data) {
-  if (gs.phase !== "action" || idx !== gs.currentPlayerIdx) return;
-  if (gs.turnHasRolled) return;
+  if (idx !== gs.currentPlayerIdx) return;
+  if (["auction","hazard_event","gov_prot_event","surprise_event"].includes(gs.phase)) return;
   const p = gs.players[idx]; const pos = data.position;
   if (pos == null || pos >= gs.board.length) return;
   const sp = gs.board[pos];
@@ -978,8 +1041,8 @@ function doMortgage(gs, idx, data) {
 }
 
 function doUnmortgage(gs, idx, data) {
-  if (gs.phase !== "action" || idx !== gs.currentPlayerIdx) return;
-  if (gs.turnHasRolled) return;
+  if (idx !== gs.currentPlayerIdx) return;
+  if (["auction","hazard_event","gov_prot_event","surprise_event"].includes(gs.phase)) return;
   const p = gs.players[idx]; const pos = data.position;
   if (pos == null || pos >= gs.board.length) return;
   const sp = gs.board[pos];
@@ -1050,12 +1113,14 @@ function doTravelRail(gs, idx, data) {
 }
 
 function doGoPayEmi(gs, idx) {
+  if (idx !== gs.currentPlayerIdx || gs.phase !== "go_prompt") return;
   const p = gs.players[idx]; const cc = p.creditCard;
   if (cc && cc.active && (cc.used||0) > 0) {
     const emi = Math.min(cc.emi, cc.used||0, p.money); p.money -= emi; cc.used -= emi;
     if (cc.used <= 0) p.creditCard = null;
   }
-  gs.pendingEvent = null; landOn(gs, idx);
+  gs.pendingEvent = null;
+  gs.phase = "action";
 }
 
 // ════════════════════════════════════════════════
@@ -1120,11 +1185,44 @@ function doBankCredit(gs, idx, data) {
 }
 
 function doBankPayEmi(gs, idx) {
+  if (idx !== gs.currentPlayerIdx || gs.phase !== "go_prompt") return;
   const p = gs.players[idx]; const cc = p.creditCard;
   if (!cc || !cc.active || (cc.used||0) <= 0) return;
   const emi = Math.min(cc.emi, cc.used||0, p.money); p.money -= emi; cc.used -= emi;
+  if (emi <= 0) return;
   if (cc.used <= 0) p.creditCard = null;
   gs.log.push(`💳 ${p.name} paid EMI ${gs.settings.currency}${emi}.`);
+}
+
+function doBankForecloseLoans(gs, idx) {
+  if (idx !== gs.currentPlayerIdx) return;
+  const p = gs.players[idx];
+  const total = p.loans.reduce((a, l) => a + (l.remaining || 0), 0);
+  if (total <= 0 || p.money < total) return;
+  p.money -= total;
+  p.loans = [];
+  gs.log.push(`🏦 ${p.name} foreclosed all loans for ${gs.settings.currency}${total}.`);
+}
+
+function doBankForecloseCredit(gs, idx) {
+  if (idx !== gs.currentPlayerIdx) return;
+  const p = gs.players[idx];
+  const cc = p.creditCard;
+  if (!cc || !cc.active) return;
+  const due = cc.used || 0;
+  if (due > 0 && p.money < due) return;
+  if (due > 0) p.money -= due;
+  p.creditCard = null;
+  gs.log.push(`💳 ${p.name} foreclosed credit card for ${gs.settings.currency}${due}.`);
+}
+
+function doBankSurrenderCredit(gs, idx) {
+  if (idx !== gs.currentPlayerIdx) return;
+  const p = gs.players[idx];
+  const cc = p.creditCard;
+  if (!cc || !cc.active || (cc.used || 0) > 0) return;
+  p.creditCard = null;
+  gs.log.push(`💳 ${p.name} surrendered their credit card.`);
 }
 
 function doBankInsurance(gs, idx) {
@@ -1257,18 +1355,6 @@ export function nextTurn(gs) {
   if (!chosen || chosen.bankrupted || chosen.disconnected || chosen.isSpectator) return;
   if (gs.players[n]) gs.players[n].turnDoublesCount = 0;
   Object.assign(gs, {currentPlayerIdx:n, phase:"roll", doublesCount:0, turnHasRolled:false});
-  gs.turnInRound++;
-  const alive = gs.players.filter(p => !p.bankrupted && !p.disconnected && !p.isSpectator);
-  if (alive.length > 0 && gs.turnInRound >= alive.length) {
-    gs.round++; gs.turnInRound = 0;
-    // Rotate hazard zone at the end of each complete round (after all players go)
-    const hzPool = gs.hazardPool.filter(p => p !== gs.hazardPos);
-    if (hzPool.length) gs.hazardPos = pick(hzPool);
-    if (gs.round - gs.taxReturnLastMoved >= gs.settings.taxReturnMoveEvery) {
-      const pool2 = gs.taxReturnPool.filter(p => p !== gs.taxReturnPos);
-      if (pool2.length) { gs.taxReturnPos = pick(pool2); gs.taxReturnLastMoved = gs.round; }
-    }
-  }
   gs.log.push(`─── ${gs.players[n].name}'s turn ───`);
   if (gs.log.length > 100) gs.log = gs.log.slice(-80);
 }

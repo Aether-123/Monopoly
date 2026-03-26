@@ -1330,10 +1330,13 @@ function renderBankPanel(){
       <input type="number" id="loan-a" value="500" min="100" max="5000" step="100" class="inp" style="flex:1;min-width:55px;font-size:.7rem">
       <select id="loan-t" class="inp" style="font-size:.7rem;padding:.15rem"><option value="4">4t</option><option value="6" selected>6t</option><option value="8">8t</option><option value="12">12t</option></select>
       <button class="btn btn-sm btn-blu" onclick="ga('bank_loan',{amount:+qid('loan-a').value,tenure:+qid('loan-t').value})">Loan</button>
-    </div>`;
+    </div>
+    ${((me.loans||[]).reduce((a,l)=>a+(l.remaining||0),0)>0&&me.money>=(me.loans||[]).reduce((a,l)=>a+(l.remaining||0),0))?`<button class="btn btn-sm btn-red" style="margin-top:.3rem;width:100%" onclick="ga('bank_foreclose_loans')">Foreclose All Loans</button>`:""}`;
   qid("bm-cc").innerHTML=me.creditCard?.active?`
     <div style="font-size:.72rem"><div style="display:flex;justify-content:space-between"><span>Used</span><b>${cur}${me.creditCard.used}/${cur}${me.creditCard.limit}</b></div><div style="display:flex;justify-content:space-between"><span>EMI</span><b>${cur}${me.creditCard.emi}/GO</b></div><div style="display:flex;justify-content:space-between"><span>Rounds</span><b>${Math.ceil(me.creditCard.roundsLeft)}</b></div></div>
-    ${me.money>=me.creditCard.emi?`<button class="btn btn-sm btn-pur" style="width:100%;margin-top:.25rem" onclick="ga('bank_pay_emi')">Pay EMI ${cur}${me.creditCard.emi}</button>`:""}`:`
+    <div style="font-size:.65rem;color:var(--muted);margin-top:.22rem">EMI is payable when you land on START each round.</div>
+    ${(me.creditCard.used||0)>0&&me.money>=(me.creditCard.used||0)?`<button class="btn btn-sm btn-red" style="width:100%;margin-top:.22rem" onclick="ga('bank_foreclose_credit')">Foreclose Card ${cur}${me.creditCard.used}</button>`:""}
+    ${(me.creditCard.used||0)<=0?`<button class="btn btn-sm btn-out" style="width:100%;margin-top:.22rem" onclick="ga('bank_surrender_credit')">Surrender Card</button>`:""}`:`
     <div style="font-size:.7rem;color:var(--muted);margin-bottom:.28rem">Fee: ${cur}${s.creditCardFee} · Limit: ${cur}${s.creditCardLimit}</div>
     <div style="display:flex;gap:.22rem">
       <select id="cc-t" class="inp" style="flex:1;font-size:.7rem"><option value="3">3t</option><option value="6" selected>6t</option><option value="9">9t</option></select>
@@ -1419,6 +1422,7 @@ function renderBankModal(){
         <button class="btn btn-blu" onclick="ga('bank_loan',{amount:+qid('bkd-loan-a').value,tenure:+qid('bkd-loan-t').value});cm('m-bank')">💸 Take Loan</button>
       </div>
     </div>
+    ${totalLoan>0&&me.money>=totalLoan?`<button class="btn btn-red" style="width:100%;margin-top:.5rem" onclick="ga('bank_foreclose_loans');renderBankModal()">Foreclose All Loans — ${cur}${totalLoan}</button>`:""}
     <div class="bk-note">⚠️ Unpaid loans accrue ${s.loanRate}% each round. Defaulting after 3 rounds marks you as bad debt.</div>`;
 
   const cc=me.creditCard;
@@ -1435,7 +1439,9 @@ function renderBankModal(){
       <div class="bk-stat"><span class="bk-stat-lbl">Rounds Left</span><span class="bk-stat-val">${Math.ceil(cc.roundsLeft||0)}</span></div>
     </div>
     <div class="bk-cc-bar-wrap"><div class="bk-cc-bar" style="width:${Math.min(100,Math.round(cc.used/cc.limit*100))}%"></div></div>
-    ${me.money>=cc.emi?`<button class="btn btn-pur" style="width:100%;margin-top:.6rem" onclick="ga('bank_pay_emi');renderBankModal()">💳 Pay EMI — ${cur}${cc.emi}</button>`:`<div class="bk-note" style="color:var(--red)">⚠️ Insufficient funds to pay EMI (${cur}${cc.emi} needed).</div>`}`:`
+    <div class="bk-note" style="margin-top:.6rem">EMI is payable on START once per round.</div>
+    ${(cc.used||0)>0&&me.money>=(cc.used||0)?`<button class="btn btn-red" style="width:100%;margin-top:.45rem" onclick="ga('bank_foreclose_credit');renderBankModal()">Foreclose Credit Card — ${cur}${cc.used}</button>`:""}
+    ${(cc.used||0)<=0?`<button class="btn btn-out" style="width:100%;margin-top:.45rem" onclick="ga('bank_surrender_credit');renderBankModal()">Surrender Credit Card</button>`:""}`:`
     <div class="bk-cc-empty">
       <div style="font-size:2.5rem;margin-bottom:.5rem">💳</div>
       <div style="font-size:.9rem;font-weight:700;margin-bottom:.3rem">No Credit Card</div>
@@ -1595,7 +1601,7 @@ function _renderActionsCore(){
   if(gs.phase==="rail_travel")h+=`<button class="btn btn-out" style="border-color:#8d6e63;color:#bcaaa4" onclick="showRailModal()">🚂 Ride (${CUR()}${gs.settings.railwayFee||75})</button><button class="btn btn-out" onclick="ga('skip_travel')">Stay</button>`;
   if(gs.phase==="go_prompt"&&gs.pendingEvent){
     const emi=gs.pendingEvent.emi||0;
-    h+=`<div class="turn-box"><b>Passed GO! +${CUR()}${gs.settings.goSalary}</b>${emi?`<br>💳 EMI due: ${CUR()}${emi}`:""}</div>`;
+    h+=`<div class="turn-box"><b>Landed on START!</b>${emi?`<br>💳 EMI due this round: ${CUR()}${emi}`:""}</div>`;
     if(emi)h+=`<button class="btn btn-acc" onclick="ga('go_pay_emi')">Pay ${CUR()}${emi}</button>`;
     h+=`<button class="btn btn-out" onclick="ga('go_end')">Continue</button>`;
   }
@@ -1827,12 +1833,11 @@ function showPropModal(pos){
     rH=`<div style="margin-top:.35rem;padding:.45rem;border:1px solid var(--border);border-radius:8px;background:var(--bg);font-size:.74rem;color:var(--muted)">🔒 Rent/transport details unlock after you land on this tile or own it.</div>`;
   }
   const isMyTurn=gs.players[gs.currentPlayerIdx]?.id===myId;
-  const rolledThisTurn=!!gs.turnHasRolled&&isMyTurn;
   const isBuyPhase=gs.phase==="buy"&&me?.position===pos&&gs.players[gs.currentPlayerIdx]?.id===myId;
   const cc=me?.creditCard;
   const canCreditBuy=isBuyPhase&&!own&&cc?.active&&(cc.limit-cc.used)>=(sp.price||0);
   const modalPrefix="";
-  const canManageMortgage=own&&me&&own.id===myId&&isMyTurn&&!rolledThisTurn;
+  const canManageMortgage=own&&me&&own.id===myId&&isMyTurn;
   const isMyProperty=own&&me&&own.id===myId&&sp.type==="property";
   const canManageHouses=isMyProperty&&!sp.mortgaged;
   const mortgagedAmount=Math.floor((sp.price||0)*0.75);
@@ -1866,7 +1871,7 @@ function showPropModal(pos){
       <div style="font-size:.7rem;color:var(--muted);margin-top:.3rem">Level rule: build evenly across country properties.</div>
       ${!isMyTurn?`<div style="font-size:.7rem;color:var(--muted);margin-top:.3rem">House actions available on your turn.</div>`:""}
       <div style="font-size:.7rem;color:var(--muted);margin-top:.25rem">Demolish refund: 50% of house cost.</div>
-      ${rolledThisTurn?`<div style="font-size:.7rem;color:var(--orange);margin-top:.3rem">Mortgage actions are locked after rolling.</div>`:""}
+
     </div>`:"";
   const mortgageHTML=canManageMortgage
     ?(sp.mortgaged
@@ -1976,10 +1981,10 @@ function showBuildModal(){
 function showMortModal(){
   const me=gs.players.find(p=>p.id===myId);
   const isMyTurn=gs.players[gs.currentPlayerIdx]?.id===myId;
-  const mortgageLocked=!isMyTurn||!!gs.turnHasRolled;
+  const mortgageLocked=!isMyTurn;
   const myProps=gs.board.filter(s=>["property","airport","railway","utility"].includes(s.type)&&s.owner===me.id);
   qid("mort-c").innerHTML=`<h2>🔒 Mortgage</h2>
-    ${mortgageLocked?`<div style="font-size:.72rem;color:var(--orange);margin-bottom:.4rem">Mortgage actions are available only before you roll on your turn.</div>`:""}
+    ${mortgageLocked?`<div style="font-size:.72rem;color:var(--orange);margin-bottom:.4rem">Mortgage actions are available only during your turn.</div>`:""}
     <div style="display:flex;flex-direction:column;gap:.3rem">
       ${myProps.map(s=>{
         const gi=s.group?parseInt(s.group.slice(1)):-1;

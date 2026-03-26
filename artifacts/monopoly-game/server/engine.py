@@ -16,7 +16,7 @@ VERY_GOOD = [
 ]
 VERY_BAD = [
     {"title":"IRS AUDIT","icon":"😱","text":"7 years of tax irregularities. Pay $1500.","action":"pay","amount":1500},
-    {"title":"IDENTITY THEFT","icon":"🦹","text":"Hacker drained everything. Pay $1500.","action":"pay","amount":1500},
+    {"title":"IDENTITY THEFT","icon":"🦹","text":"Hacker drains 80% of your wallet cash.","action":"pay","walletPercentOfCash":80},
     {"title":"PONZI SCHEME","icon":"📉","text":"Your broker was fraud. Lose $1500.","action":"pay","amount":1500},
     {"title":"FLOODED BASEMENT","icon":"🌊","text":"Burst pipe destroyed everything. Pay $1500.","action":"pay","amount":1500},
 ]
@@ -80,7 +80,7 @@ SURPRISE_CARDS = [
 HAZARDS = [
     {"id":"crash",    "name":"Car Crash",    "icon":"🚗💥","desc":"Pay $50 for repairs.",     "type":"money","amount":50},
     {"id":"accident", "name":"Accident",     "icon":"🏥",  "desc":"Hospital bill!",           "type":"money","amount":100},
-    {"id":"robbery",  "name":"Robbery!",     "icon":"🔫",  "desc":"Your wallet is stolen!",   "type":"robbery"},
+    {"id":"robbery",  "name":"Robbery!",     "icon":"🔫",  "desc":"Lose 80% of your wallet cash!",   "type":"robbery"},
     {"id":"quake",    "name":"Earthquake!", "icon":"🌍💥","desc":"Houses demolished!",        "type":"disaster"},
     {"id":"cyclone",  "name":"Cyclone!",    "icon":"🌀",  "desc":"Storm destroys buildings.","type":"disaster"},
     {"id":"tsunami",  "name":"Tsunami!",    "icon":"🌊",  "desc":"Property flooded.",        "type":"disaster","fixed":1},
@@ -291,7 +291,7 @@ def process_action(gs, pi, action, data):
         next_turn(gs); return gs
     match action:
         case "roll":            do_roll(gs, pi)
-        case "buy":             do_buy(gs, pi)
+        case "buy":             do_buy(gs, pi, data)
         case "pass":            do_end_turn(gs, pi)
         case "end_turn":        do_end_turn(gs, pi)
         case "build":           do_build(gs, pi, data)
@@ -305,13 +305,16 @@ def process_action(gs, pi, action, data):
         case "travel_rail":     do_travel_rail(gs, pi, data)
         case "skip_travel":     gs["phase"] = "action"
         case "go_pay_emi":      do_go_pay_emi(gs, pi)
-        case "go_end":          land_on(gs, pi)
+        case "go_end":          gs["pendingEvent"]=None; gs["phase"]="action"
         case "bank_deposit":    do_bank_deposit(gs, pi, data)
         case "bank_withdraw":   do_bank_withdraw(gs, pi, data)
         case "bank_loan":       do_bank_loan(gs, pi, data)
         case "bank_repay":      do_bank_repay(gs, pi, data)
         case "bank_credit":     do_bank_credit(gs, pi, data)
         case "bank_pay_emi":    do_bank_pay_emi(gs, pi)
+        case "bank_foreclose_loans": do_bank_foreclose_loans(gs, pi)
+        case "bank_foreclose_credit": do_bank_foreclose_credit(gs, pi)
+        case "bank_surrender_credit": do_bank_surrender_credit(gs, pi)
         case "bank_insurance":  do_bank_insurance(gs, pi)
         case "claim_insurance": do_claim_insurance(gs, pi)
         case "hazard_ack"|"gov_ack":
@@ -330,7 +333,6 @@ def process_action(gs, pi, action, data):
 def do_roll(gs, idx):
     if gs["phase"] != "roll": return
     p = gs["players"][idx]
-    accrue_interest(gs, idx)
     d1, d2 = random.randint(1,6), random.randint(1,6)
     doubles = d1 == d2
     gs["lastRoll"] = [d1, d2]
@@ -417,10 +419,41 @@ def move_player(gs, idx, steps):
         earn_money(gs, idx, gs["settings"]["goSalary"], "GO salary")
         if p.get("hasInsurance"):
             p["money"] -= gs["settings"]["insurancePremium"]
-        cc = p.get("creditCard")
-        if cc and cc.get("active") and cc.get("used",0) > 0:
-            gs["phase"] = "go_prompt"; gs["pendingEvent"] = {"type":"go_prompt","emi":cc["emi"]}; return
     land_on(gs, idx)
+
+def apply_round_economy(gs):
+    s = gs["settings"]
+    for i,p in enumerate(gs["players"]):
+        if p.get("bankrupted") or p.get("disconnected") or p.get("isSpectator"): continue
+        if p.get("bankDeposit",0) > 0:
+            intr = math.floor(p["bankDeposit"]*(s["depositRate"]/100))
+            p["bankDepositInterest"] += intr
+        dead = []
+        for loan in p.get("loans",[]):
+            intr = math.ceil(loan["remaining"]*(s["loanRate"]/100))
+            loan["remaining"] += intr
+            loan["turnsLeft"] -= 1
+            if loan["turnsLeft"] <= 0 and loan["remaining"] > 0:
+                enforce_bad_debt(gs, i, loan)
+                dead.append(loan)
+        p["loans"] = [l for l in p.get("loans",[]) if l not in dead]
+        cc = p.get("creditCard")
+        if cc and cc.get("active"):
+            cc["roundsLeft"] -= 1
+            if cc["roundsLeft"] <= 0 and cc.get("used",0) > 0:
+                enforce_credit_debt(gs, i)
+
+def end_round_on_start(gs):
+    gs["round"] = gs.get("round",1) + 1
+    gs["turnInRound"] = 0
+    apply_round_economy(gs)
+    pool=[p for p in gs["hazardPool"] if p!=gs["hazardPos"]]
+    if pool: gs["hazardPos"] = random.choice(pool)
+    if gs["round"]-gs["taxReturnLastMoved"]>=gs["settings"]["taxReturnMoveEvery"]:
+        pool2=[p for p in gs["taxReturnPool"] if p!=gs["taxReturnPos"]]
+        if pool2:
+            gs["taxReturnPos"] = random.choice(pool2)
+            gs["taxReturnLastMoved"] = gs["round"]
 
 def land_on(gs, idx):
     p = gs["players"][idx]; sp = gs["board"][p["position"]]; pos = p["position"]
@@ -429,7 +462,14 @@ def land_on(gs, idx):
     if pos == gs["taxReturnPos"]: land_tax_return(gs, idx); return
     if pos == gs["randomTaxPos"]: land_random_tax(gs, idx); return
     t = sp.get("type"); s = gs["settings"]
-    if t == "go": gs["phase"] = "action"
+    if t == "go":
+        end_round_on_start(gs)
+        cc = p.get("creditCard")
+        if cc and cc.get("active") and cc.get("used",0) > 0:
+            gs["phase"] = "go_prompt"
+            gs["pendingEvent"] = {"type":"go_prompt","emi":min(cc.get("emi",0),cc.get("used",0))}
+            return
+        gs["phase"] = "action"
     elif t == "jail": gs["phase"] = "action"
     elif t == "free_parking":
         pot = gs.get("treasurePot")
@@ -559,7 +599,9 @@ def apply_hazard(gs, idx):
     p = gs["players"][idx]; haz = random.choice(HAZARDS)
     lost_money=0; lost_houses=0; lost_rebuild=0
     if haz["type"]=="money": lost_money=min(haz["amount"],p["money"]); p["money"]-=lost_money
-    elif haz["type"]=="robbery": lost_money=p["money"]; p["money"]=0
+    elif haz["type"]=="robbery":
+        lost_money=math.floor(max(0,p["money"])*0.8)
+        p["money"]-=lost_money
     elif haz["type"] in ("disaster","fire"):
         owned=[gs["board"][pos] for pos in p["properties"] if gs["board"][pos].get("houses",0)>0]
         if haz["type"]=="fire":
@@ -613,7 +655,12 @@ def draw_chest(gs, idx):
 def apply_card(gs, idx, card, *, surprise):
     p=gs["players"][idx]; a=card.get("action")
     if   a=="gain":  earn_money(gs, idx, card["amount"], "card")
-    elif a=="pay":   charge_money(gs, idx, card["amount"], "card penalty")
+    elif a=="pay":
+        if isinstance(card.get("walletPercentOfCash"), (int,float)) and card.get("walletPercentOfCash",0)>0:
+            amount=math.floor(max(0,p["money"])*(card["walletPercentOfCash"]/100))
+            p["money"]-=amount
+        else:
+            charge_money(gs, idx, card["amount"], "card penalty")
     elif a=="goto":
         p["position"]=card["position"]
         if card["position"]==0: earn_money(gs, idx, gs["settings"]["goSalary"], "GO")
@@ -638,14 +685,19 @@ def apply_card(gs, idx, card, *, surprise):
 # ═══════════════════════════════════════════════════════
 #  BUY / BUILD / MORTGAGE
 # ═══════════════════════════════════════════════════════
-def do_buy(gs, idx):
+def do_buy(gs, idx, data):
     p=gs["players"][idx]; sp=gs["board"][p["position"]]
     if not sp or sp.get("owner"): gs["phase"]="action"; return
     cc=p.get("creditCard"); cc_room=(cc["limit"]-cc.get("used",0)) if cc and cc.get("active") else 0
-    if p["money"]+cc_room<sp["price"]: gs["phase"]="action"; return
-    if p["money"]>=sp["price"]: p["money"]-=sp["price"]
+    use_credit=bool((data or {}).get("useCredit"))
+    if use_credit:
+        if not cc or not cc.get("active") or cc_room < sp["price"]: gs["phase"]="action"; return
+        cc["used"] = cc.get("used",0) + sp["price"]
     else:
-        fc=sp["price"]-p["money"]; cc["used"]=cc.get("used",0)+fc; p["money"]=0
+        if p["money"]+cc_room<sp["price"]: gs["phase"]="action"; return
+        if p["money"]>=sp["price"]: p["money"]-=sp["price"]
+        else:
+            fc=sp["price"]-p["money"]; cc["used"]=cc.get("used",0)+fc; p["money"]=0
     sp["owner"]=p["id"]; p["properties"].append(p["position"])
     gs["log"].append(f"🏠 {p['name']} bought {sp['name']} for {gs['settings']['currency']}{sp['price']}")
     gs["phase"]="action"
@@ -739,11 +791,12 @@ def do_travel_rail(gs, idx, data):
     p["position"]=dest_pos; gs["log"].append(f"🚂 {p['name']} rode to {gs['board'][dest_pos].get('name','railway')}"); gs["phase"]="action"
 
 def do_go_pay_emi(gs, idx):
+    if idx!=gs.get("currentPlayerIdx") or gs.get("phase")!="go_prompt": return
     p=gs["players"][idx]; cc=p.get("creditCard")
     if cc and cc.get("active") and cc.get("used",0)>0:
         emi=min(cc["emi"],cc.get("used",0),p["money"]); p["money"]-=emi; cc["used"]-=emi
         if cc["used"]<=0: p["creditCard"]=None
-    gs["pendingEvent"]=None; land_on(gs, idx)
+    gs["pendingEvent"]=None; gs["phase"]="action"
 
 # ═══════════════════════════════════════════════════════
 #  BANK
@@ -790,10 +843,35 @@ def do_bank_credit(gs, idx, data):
     p["creditCard"]={"active":True,"used":0,"limit":limit,"emi":math.ceil(limit/ten),"tenure":ten,"paidTurns":0,"roundsLeft":gs["settings"].get("creditCardRounds",2)}
 
 def do_bank_pay_emi(gs, idx):
+    if idx!=gs.get("currentPlayerIdx") or gs.get("phase")!="go_prompt": return
     p=gs["players"][idx]; cc=p.get("creditCard")
     if not cc or not cc.get("active") or cc.get("used",0)<=0: return
     emi=min(cc["emi"],cc.get("used",0),p["money"]); p["money"]-=emi; cc["used"]-=emi
+    if emi<=0: return
     if cc["used"]<=0: p["creditCard"]=None
+
+def do_bank_foreclose_loans(gs, idx):
+    if idx!=gs.get("currentPlayerIdx"): return
+    p=gs["players"][idx]
+    total=sum(l.get("remaining",0) for l in p.get("loans",[]))
+    if total<=0 or p["money"]<total: return
+    p["money"]-=total
+    p["loans"]=[]
+
+def do_bank_foreclose_credit(gs, idx):
+    if idx!=gs.get("currentPlayerIdx"): return
+    p=gs["players"][idx]; cc=p.get("creditCard")
+    if not cc or not cc.get("active"): return
+    due=cc.get("used",0)
+    if due>0 and p["money"]<due: return
+    if due>0: p["money"]-=due
+    p["creditCard"]=None
+
+def do_bank_surrender_credit(gs, idx):
+    if idx!=gs.get("currentPlayerIdx"): return
+    p=gs["players"][idx]; cc=p.get("creditCard")
+    if not cc or not cc.get("active") or cc.get("used",0)>0: return
+    p["creditCard"]=None
 
 def do_bank_insurance(gs, idx):
     p=gs["players"][idx]
@@ -845,15 +923,6 @@ def next_turn(gs):
     while gs["players"][n]["bankrupted"] and loops<len(gs["players"]):
         n=(n+1)%len(gs["players"]); loops+=1
     gs.update({"currentPlayerIdx":n,"phase":"roll","doublesCount":0})
-    gs["turnInRound"]+=1
-    alive=[p for p in gs["players"] if not p["bankrupted"]]
-    if gs["turnInRound"]>=len(alive):
-        gs["round"]+=1; gs["turnInRound"]=0
-        pool=[p for p in gs["hazardPool"] if p!=gs["hazardPos"]]
-        if pool: gs["hazardPos"]=random.choice(pool)
-        if gs["round"]-gs["taxReturnLastMoved"]>=gs["settings"]["taxReturnMoveEvery"]:
-            pool2=[p for p in gs["taxReturnPool"] if p!=gs["taxReturnPos"]]
-            if pool2: gs["taxReturnPos"]=random.choice(pool2); gs["taxReturnLastMoved"]=gs["round"]
     gs["log"].append(f"─── {gs['players'][n]['name']}'s turn ───")
     if len(gs["log"])>100: gs["log"]=gs["log"][-80:]
 
