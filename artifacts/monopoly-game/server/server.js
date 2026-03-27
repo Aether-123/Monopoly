@@ -63,6 +63,56 @@ const VOTEKICK_THRESHOLD = 0.6;
 const TURN_TIMEOUT_MS = 5 * 60 * 1000;
 const DOMESTIC_PRESETS = new Set(["india", "uk", "usa"]);
 
+function harmonizeCountrySetsByGroup(spaces) {
+  if (!Array.isArray(spaces) || !spaces.length) return spaces;
+
+  const board = spaces.map((sp, idx) => ({ ...(sp || {}), pos: Number(sp?.pos ?? idx) }));
+  const catalog = new Map(
+    E.getCountriesList().map((c) => [String(c.code || "").toLowerCase(), c]),
+  );
+  const fallbackByGroup = ["ng", "tr", "mx", "ru", "in", "jp", "us", "gb"];
+
+  const propByGroup = new Map();
+  for (const sp of board) {
+    if (sp?.type !== "property") continue;
+    const grp = String(sp.group || "");
+    if (!grp) continue;
+    if (!propByGroup.has(grp)) propByGroup.set(grp, []);
+    propByGroup.get(grp).push(sp);
+  }
+
+  for (const [grp, tiles] of propByGroup.entries()) {
+    const counts = new Map();
+    for (const tile of tiles) {
+      const code = String(tile.countryCode || "").toLowerCase();
+      if (!code || !catalog.has(code)) continue;
+      counts.set(code, (counts.get(code) || 0) + 1);
+    }
+
+    let chosen = "";
+    if (counts.size) {
+      chosen = [...counts.entries()]
+        .sort((a, b) => {
+          if (b[1] !== a[1]) return b[1] - a[1];
+          return a[0].localeCompare(b[0]);
+        })[0][0];
+    } else {
+      const gi = Math.max(0, Math.min(7, Number.parseInt(grp.replace("g", ""), 10) || 0));
+      const fallback = fallbackByGroup[gi] || fallbackByGroup[fallbackByGroup.length - 1];
+      chosen = catalog.has(fallback) ? fallback : (catalog.keys().next().value || "");
+    }
+
+    const meta = chosen ? catalog.get(chosen) : null;
+    for (const tile of tiles) {
+      tile.countryCode = chosen || "";
+      tile.countryName = meta?.name || tile.countryName || "";
+      tile.countryFlag = meta?.flag || tile.countryFlag || "";
+    }
+  }
+
+  return board;
+}
+
 function applyEdgeCountrySetRule(spaces, opts = {}) {
   if (!Array.isArray(spaces) || !spaces.length) return spaces;
   const seedSalt = String(opts?.seedSalt || "");
@@ -380,7 +430,7 @@ function applyEdgeCountrySetRule(spaces, opts = {}) {
     if (sp.mortgaged == null) sp.mortgaged = false;
   });
 
-  return board;
+  return harmonizeCountrySetsByGroup(board);
 }
 
 function applyFortyFourInfrastructureRule(spaces) {
@@ -509,7 +559,7 @@ function applyFortyFourInfrastructureRule(spaces) {
     }
   }
 
-  return board;
+  return harmonizeCountrySetsByGroup(board);
 }
 
 function applyFortyFourWestTaxFallback(spaces, opts = {}) {
@@ -1257,6 +1307,7 @@ function buildWorldwideBoard(wwCities, size, seedSalt = "") {
   }
 
   let out = E.enforceBoardLayoutConstraints(board, size);
+  out = harmonizeCountrySetsByGroup(out);
   out = enforceEastTaxGovPattern(out);
   normalizePropertyPricing(out);
   out = enforceRequestedUtilityAndTopSet(out);
@@ -1395,7 +1446,12 @@ function activeCount(room) {
 
 function getActiveCompetitivePlayers(gs) {
   if (!gs) return [];
-  return gs.players.filter(p => !p.bankrupted && !p.isSpectator && !p.disconnected);
+  const now = Date.now() / 1000;
+  return gs.players.filter((p) => {
+    if (!p || p.bankrupted || p.isSpectator) return false;
+    if (!p.disconnected) return true;
+    return Number(p.reconnectDeadline || 0) > now;
+  });
 }
 
 function assignWinnerIfSingleActive(gs) {
@@ -2041,6 +2097,26 @@ io.on("connection", (socket) => {
       tradeId:data.tradeId, fromId:playerId,
       toId:data.toId, offer:data.offer||{},
       message:sanitize(data.message||"", 200),
+    });
+  });
+
+  socket.on("trade_cancel", (data) => {
+    const room = roomOf(socket.id); if (!room) return;
+    data = data || {};
+    const playerId = pid(socket.id);
+    const tradeId = sanitize(String(data.tradeId || ""), 80);
+    if (!tradeId) return;
+
+    const trade = activeTrades.get(tradeId);
+    if (!trade || trade.roomId !== room.id) return;
+    if (playerId !== trade.fromId && playerId !== trade.toId) return;
+
+    activeTrades.delete(tradeId);
+    io.to(room.id).emit("trade_cancelled", {
+      tradeId,
+      byId: playerId,
+      byName: findGp(room.gameState, playerId)?.name || "Player",
+      reason: sanitize(String(data.reason || "cancelled"), 80),
     });
   });
 

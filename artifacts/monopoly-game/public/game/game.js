@@ -414,6 +414,12 @@ function _initSocketCore(){
   socket.on("trade_incoming",d=>showIncomingTrade(d));
   socket.on("trade_accepted",()=>{toast("✅ Trade accepted!");cm("m-t-in");cm("m-neg");renderSidePanels();});
   socket.on("trade_declined",({tradeId})=>{toast("❌ Trade declined.");cm("m-t-in");cm("m-neg");});
+  socket.on("trade_cancelled",({tradeId,byId,byName})=>{
+    incomingTrade=null;
+    cm("m-t-in");
+    cm("m-neg");
+    toast(`🚫 Trade cancelled by ${byName||"a player"}.`);
+  });
   socket.on("trade_negotiate",d=>showNegotiateModal(d));
   socket.on("trade_chip_in",d=>showChipInNotification(d));
   socket.on("trade_chip_response",d=>handleChipResponse(d));
@@ -501,10 +507,16 @@ async function onStateUpdate(newGs){
     }
   }
   if(oldGs&&!_tokenMoving){
+    const moved=[];
     for(const p of gs.players){
       const old=oldGs.players.find(q=>q.id===p.id);
       if(!old||old.position===p.position||p.bankrupted)continue;
-      await animateTokenStep(p.id,old.position,p.position,gs.board.length);
+      moved.push({id:p.id,from:old.position,to:p.position});
+    }
+    if(moved.length){
+      const actorId=oldGs.players?.[oldGs.currentPlayerIdx||0]?.id;
+      const pick=moved.find(m=>m.id===actorId)||moved[0];
+      await animateTokenStep(pick.id,pick.from,pick.to,gs.board.length);
     }
   }
   renderGame(false,boardChanged);
@@ -562,10 +574,12 @@ async function animateTokenStep(playerId,from,to,boardLen){
   _tokenMoving=true;
   const S=gs?.tilesPerSide||9;
   const {cPx,tPx}=getBoardDims(S);
-  const stepDelay=85;
+  const targetType=gs?.board?.[to]?.type||"";
+  const forceSteppedMove=targetType==="go"||targetType==="jail"||targetType==="go_to_jail";
+  const baseDelay=forceSteppedMove?40:85;
   let cur=from;
   const steps=to>=from?to-from:boardLen-from+to;
-  if(steps>12){
+  if(steps>12&&!forceSteppedMove){
     const tok=qid("tok-"+playerId);
     if(tok){
       tok.style.transition="left .18s linear, top .18s linear";
@@ -579,15 +593,19 @@ async function animateTokenStep(playerId,from,to,boardLen){
     _tokenMoving=false;
     return;
   }
-  for(let i=0;i<steps;i++){
-    cur=(cur+1)%boardLen;
+  const targetDuration=forceSteppedMove?Math.min(420,Math.max(180,steps*28)):steps*baseDelay;
+  const visualSteps=forceSteppedMove?Math.min(8,Math.max(2,steps)):steps;
+  const hop=Math.max(1,Math.ceil(steps/visualSteps));
+  const stepDelay=Math.max(24,Math.floor(targetDuration/Math.max(1,visualSteps)));
+  for(let i=0;i<visualSteps;i++){
+    cur=(i===visualSteps-1)?to:((cur+hop)%boardLen);
     const tok=qid("tok-"+playerId);if(!tok)break;
     tok.style.transition=`left ${stepDelay}ms linear, top ${stepDelay}ms linear`;
     const {x,y}=txy(cur,S,cPx,tPx);
     const off=getTokenOffsets(playerId);
     tok.style.left=(x+off.ox-18)+"px";tok.style.top=(y+off.oy-18)+"px";
-    if(i===steps-1){tok.classList.remove("landing");void tok.offsetWidth;tok.classList.add("landing");flashTile(cur);}
-    await sleep(i===steps-1?0:stepDelay);
+    if(i===visualSteps-1){tok.classList.remove("landing");void tok.offsetWidth;tok.classList.add("landing");flashTile(cur);}
+    await sleep(i===visualSteps-1?0:stepDelay);
   }
   _tokenMoving=false;
 }
@@ -1048,14 +1066,17 @@ function showIncomingTrade({tradeId,fromId,toId,fromName,toName,offer}){
   const isInvolved=fromId===myId||toId===myId;
   const dp=pos=>gs?.board[pos]?`${cityLabel(gs.board[pos])}`:`#${pos}`;
   
-  if(isDirectRecipient) incomingTrade={tradeId,fromId,offer};
+  if(isInvolved) incomingTrade={tradeId,fromId,toId,offer};
   
   let actionButtons=``;
   if(isDirectRecipient){
     actionButtons=`
       <button class="btn btn-acc" onclick="respondTrade(true)">✅ Accept</button>
       <button class="btn btn-red" onclick="respondTrade(false)">❌ Decline</button>
-      <button class="btn btn-out" onclick="openNegotiate()">🔄 Counter</button>`;
+      <button class="btn btn-out" onclick="openNegotiate()">🔄 Counter</button>
+      <button class="btn btn-out" onclick="cancelTrade()">🚫 Cancel Trade</button>`;
+  } else if(isInvolved){
+    actionButtons=`<button class="btn btn-out" onclick="cancelTrade()">🚫 Cancel Trade</button>`;
   } else if(!isInvolved){
     actionButtons=`<button class="btn btn-out" onclick="showSelectChipTargets('${tradeId}','${fromId}','${toId}')">💡 Chip In</button>`;
   }
@@ -1082,6 +1103,13 @@ function showIncomingTrade({tradeId,fromId,toId,fromName,toName,offer}){
 
 function declineTrade(){respondTrade(false);}
 function respondTrade(ok){if(!incomingTrade)return;socket.emit("trade_respond",{...incomingTrade,accepted:ok});cm("m-t-in");incomingTrade=null;}
+function cancelTrade(){
+  if(!incomingTrade?.tradeId)return;
+  socket.emit("trade_cancel",{tradeId:incomingTrade.tradeId,reason:"manual"});
+  cm("m-t-in");
+  cm("m-neg");
+  incomingTrade=null;
+}
 
 function showSelectChipTargets(tradeId,fromId,toId){
   const from=gs?.players.find(p=>p.id===fromId);
@@ -1235,7 +1263,7 @@ function sendNegotiate(){
 
 function showNegotiateModal({tradeId,fromId,toId,offer,message}){
   if(toId!==myId)return;
-  incomingTrade={tradeId,fromId,offer};
+  incomingTrade={tradeId,fromId,toId,offer};
   const from=gs?.players.find(p=>p.id===fromId);
   const dp=pos=>gs?.board[pos]?`${cityLabel(gs.board[pos])}`:`#${pos}`;
   qid("tin-c").innerHTML=`
@@ -1257,6 +1285,7 @@ function showNegotiateModal({tradeId,fromId,toId,offer,message}){
       <button class="btn btn-acc" onclick="respondTrade(true)">✅ Accept</button>
       <button class="btn btn-red" onclick="respondTrade(false)">❌ Decline</button>
       <button class="btn btn-out" onclick="openNegotiate()">🔄 Counter Again</button>
+      <button class="btn btn-out" onclick="cancelTrade()">🚫 Cancel Trade</button>
     </div>`;
   om("m-t-in");
 }
@@ -3042,6 +3071,39 @@ function editorApplyEdgeCountrySetRule(board, S){
     if(!sp)return;
     sp.type="utility";sp.group="company_set";sp.name=name;sp.countryCode="";sp.countryName="";sp.iso="";
     sp.price=150;sp.rents=[0,0,0,0,0,0];sp.houseCost=0;sp.houses=0;sp.owner=null;sp.mortgaged=false;
+  });
+
+  // Keep each color-group as a single country set across every board variant.
+  const countryCatalog=new Map((_wwCountries||[]).map(c=>[String(c.code||"").toLowerCase(),c]));
+  const fallbackByGroup=["ng","tr","mx","ru","in","jp","us","gb"];
+  const propByGroup=new Map();
+  board.forEach(sp=>{
+    if(sp?.type!=="property")return;
+    const grp=String(sp.group||"");
+    if(!grp)return;
+    if(!propByGroup.has(grp))propByGroup.set(grp,[]);
+    propByGroup.get(grp).push(sp);
+  });
+  propByGroup.forEach((tiles,grp)=>{
+    const counts=new Map();
+    tiles.forEach(tile=>{
+      const code=String(tile.countryCode||"").toLowerCase();
+      if(!code)return;
+      counts.set(code,(counts.get(code)||0)+1);
+    });
+    let chosen="";
+    if(counts.size){
+      chosen=[...counts.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0]))[0][0];
+    }else{
+      const gi=Math.max(0,Math.min(7,Number.parseInt(String(grp).replace("g",""),10)||0));
+      chosen=fallbackByGroup[gi]||fallbackByGroup[fallbackByGroup.length-1];
+    }
+    const meta=countryCatalog.get(chosen)||null;
+    tiles.forEach(tile=>{
+      tile.countryCode=chosen||"";
+      tile.countryName=meta?.name||tile.countryName||"";
+      tile.iso=chosen||tile.iso||"";
+    });
   });
   
   return board;

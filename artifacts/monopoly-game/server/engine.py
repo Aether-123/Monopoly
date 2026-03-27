@@ -417,6 +417,7 @@ def move_player(gs, idx, steps):
     p["position"] = (p["position"]+steps) % len(gs["board"])
     if p["position"] < prev and steps > 0:
         earn_money(gs, idx, gs["settings"]["goSalary"], "GO salary")
+        apply_start_economy_for_player(gs, idx, "pass")
         if p.get("hasInsurance"):
             p["money"] -= gs["settings"]["insurancePremium"]
     land_on(gs, idx)
@@ -446,7 +447,6 @@ def apply_round_economy(gs):
 def end_round_on_start(gs):
     gs["round"] = gs.get("round",1) + 1
     gs["turnInRound"] = 0
-    apply_round_economy(gs)
     pool=[p for p in gs["hazardPool"] if p!=gs["hazardPos"]]
     if pool: gs["hazardPos"] = random.choice(pool)
     if gs["round"]-gs["taxReturnLastMoved"]>=gs["settings"]["taxReturnMoveEvery"]:
@@ -454,6 +454,32 @@ def end_round_on_start(gs):
         if pool2:
             gs["taxReturnPos"] = random.choice(pool2)
             gs["taxReturnLastMoved"] = gs["round"]
+
+def apply_start_economy_for_player(gs, idx, source="start"):
+    p = gs["players"][idx]
+    s = gs["settings"]
+    if not p or p.get("bankrupted") or p.get("disconnected") or p.get("isSpectator"):
+        return
+
+    if p.get("bankDeposit", 0) > 0:
+        intr = math.floor(p["bankDeposit"] * (s["depositRate"] / 100))
+        p["bankDepositInterest"] += intr
+        if intr > 0:
+            gs["log"].append(f"🏦 {p['name']} deposit interest +{s['currency']}{intr}")
+
+    dead = []
+    for loan in p.get("loans", []):
+        intr = math.ceil(loan["remaining"] * (s["loanRate"] / 100))
+        loan["remaining"] += intr
+        loan["turnsLeft"] -= 1
+        if loan["turnsLeft"] <= 0 and loan["remaining"] > 0:
+            enforce_bad_debt(gs, idx, loan)
+            dead.append(loan)
+    p["loans"] = [l for l in p.get("loans", []) if l not in dead]
+
+    cc = p.get("creditCard")
+    if cc and cc.get("active"):
+        auto_pay_credit_emi(gs, idx, f"start-{source}")
 
 def refresh_credit_rounds_left(cc):
     if not cc or not cc.get("active"):
@@ -483,6 +509,7 @@ def auto_pay_credit_emi(gs, idx, source="round"):
 
 def resolve_start_landing(gs, idx):
     end_round_on_start(gs)
+    apply_start_economy_for_player(gs, idx, "land")
     bonus_pct = float(gs["settings"].get("startTileBonusPercent", 0) or 0)
     bonus = max(0, math.floor((gs["settings"].get("goSalary", 0) or 0) * (bonus_pct / 100)))
     if bonus > 0:
@@ -995,6 +1022,9 @@ def generate_default_board(S):
     prop_slots=[i for i in range(total) if i not in specials]
     grp_sz=math.ceil(len(prop_slots)/8)
     grp_map={pos:f"g{min(i//grp_sz,7)}" for i,pos in enumerate(prop_slots)}
+    standard_by_order=["ng","tr","mx","ru","in","jp","us","gb"]
+    country_by_code={str(c.get("code","")):c for c in COUNTRIES}
+    city_cursor_by_group={}
     base_prices=[20,50,90,130,180,240,300,360]
     board=[]
     for pos in range(total):
@@ -1020,8 +1050,27 @@ def generate_default_board(S):
         elif pos in grp_map:
             grp=grp_map[pos]; gi=int(grp[1]); base=base_prices[gi]
             slots=[p for p in prop_slots if grp_map.get(p)==grp]; idx=slots.index(pos)
-            price=base+idx*10
-            board.append({"pos":pos,"type":"property","group":grp,"name":f"Property {pos}","price":price,"rents":build_rents(price),"houseCost":max(50,math.floor(price*0.5)),"houses":0,"owner":None,"mortgaged":False})
+            country_code=standard_by_order[min(gi, len(standard_by_order)-1)]
+            country=country_by_code.get(country_code) or {}
+            city_cursor=city_cursor_by_group.get(grp,0)
+            city=(country.get("cities") or [f"Property {pos}"])[city_cursor % max(1, len(country.get("cities") or []))]
+            city_cursor_by_group[grp]=city_cursor+1
+            price=(country.get("base") or base)+city_cursor*10
+            board.append({
+                "pos":pos,
+                "type":"property",
+                "group":grp,
+                "name":city,
+                "countryCode":country.get("code","") or "",
+                "countryFlag":country.get("flag","") or "",
+                "countryName":country.get("name","") or "",
+                "price":price,
+                "rents":build_rents(price),
+                "houseCost":max(50,math.floor(price*0.5)),
+                "houses":0,
+                "owner":None,
+                "mortgaged":False,
+            })
         else: board.append({"pos":pos,"type":"chance","name":"❓ Surprise"})
     return board
 
@@ -1031,7 +1080,7 @@ def generate_random_board(seed_str, mode, S):
     if mode=="same_country":
         c=COUNTRIES[rng.randint(0,len(COUNTRIES)-1)]
         for i,sp in enumerate(s for s in board if s.get("type")=="property"):
-            sp["name"]=c["cities"][i%len(c["cities"])]; sp["countryFlag"]=c["flag"]; sp["countryName"]=c["name"]
+            sp["name"]=c["cities"][i%len(c["cities"])]; sp["countryFlag"]=c["flag"]; sp["countryName"]=c["name"]; sp["countryCode"]=c.get("code","")
     else:
         used=set()
         for grp in [f"g{i}" for i in range(8)]:
@@ -1042,13 +1091,14 @@ def generate_random_board(seed_str, mode, S):
             else: pool=COUNTRIES
             c=pool[rng.randint(0,len(pool)-1)]; used.add(c["code"]); ci=0
             for sp in (s for s in board if s.get("type")=="property" and s.get("group")==grp):
-                sp["name"]=c["cities"][ci%len(c["cities"])]; sp["countryFlag"]=c["flag"]; sp["countryName"]=c["name"]; ci+=1
+                sp["name"]=c["cities"][ci%len(c["cities"])]; sp["countryFlag"]=c["flag"]; sp["countryName"]=c["name"]; sp["countryCode"]=c.get("code",""); ci+=1
     return board
 
 def generate_domestic_board(preset, S):
     dm=DOMESTIC_MAPS.get(preset)
     if not dm: return generate_default_board(S)
     board=generate_default_board(S)
+    preset_country_code={"india":"in","uk":"gb","usa":"us"}.get(preset,"")
     states=dm["states"]
     prop_by_group={}
     for sp in board:
@@ -1061,6 +1111,7 @@ def generate_domestic_board(preset, S):
         for ci,sp in enumerate(props):
             city=cities[ci%len(cities)]; sp["name"]=city; sp["stateName"]=state["name"]
             sp["countryFlag"]=dm["flag"]; sp["countryName"]=dm["name"]
+            sp["countryCode"]=preset_country_code
             sp["price"]=base_price+ci*10; sp["rents"]=build_rents(sp["price"])
             sp["houseCost"]=max(50,math.floor(sp["price"]*0.5))
     return board

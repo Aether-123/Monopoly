@@ -555,6 +555,7 @@ function movePlayer(gs, idx, steps) {
   if (passedStart && p.position !== startPos) {
     earnMoney(gs, idx, gs.settings.goSalary, "GO salary");
     p._passedGoSalaryThisMove = gs.settings.goSalary;
+    applyStartEconomyForPlayer(gs, idx, "pass");
     if (gs.treasurePot !== null && gs.treasurePot !== undefined) {
       gs.treasurePot = (gs.treasurePot || 0) + 50;
       gs.log.push(`💰 ${gs.settings.currency}50 added to Treasure (passed GO).`);
@@ -594,7 +595,6 @@ function applyRoundEconomy(gs) {
 function endRoundOnStart(gs) {
   gs.round = (gs.round || 1) + 1;
   gs.turnInRound = 0;
-  applyRoundEconomy(gs);
   const hzPool = gs.hazardPool.filter(p => p !== gs.hazardPos);
   if (hzPool.length) gs.hazardPos = pick(hzPool);
   if (gs.round - gs.taxReturnLastMoved >= gs.settings.taxReturnMoveEvery) {
@@ -604,6 +604,33 @@ function endRoundOnStart(gs) {
       gs.taxReturnLastMoved = gs.round;
     }
   }
+}
+
+function applyStartEconomyForPlayer(gs, idx, source = "start") {
+  const p = gs.players[idx];
+  const s = gs.settings;
+  if (!p || p.bankrupted || p.disconnected || p.isSpectator) return;
+
+  if (p.bankDeposit > 0) {
+    const interest = Math.floor(p.bankDeposit * (s.depositRate / 100));
+    p.bankDepositInterest += interest;
+    if (interest > 0) gs.log.push(`🏦 ${p.name} deposit interest +${s.currency}${interest}`);
+  }
+
+  const deadLoans = [];
+  for (const loan of p.loans) {
+    const interest = Math.ceil(loan.remaining * (s.loanRate / 100));
+    loan.remaining += interest;
+    loan.turnsLeft -= 1;
+    if (loan.turnsLeft <= 0 && loan.remaining > 0) {
+      enforceBadDebt(gs, idx, loan);
+      deadLoans.push(loan);
+    }
+  }
+  p.loans = p.loans.filter((l) => !deadLoans.includes(l));
+
+  const cc = p.creditCard;
+  if (cc && cc.active) autoPayCreditEmi(gs, idx, `start-${source}`);
 }
 
 function refreshCreditRoundsLeft(cc) {
@@ -637,6 +664,7 @@ function autoPayCreditEmi(gs, idx, source = "round") {
 
 function resolveStartLanding(gs, idx) {
   endRoundOnStart(gs);
+  applyStartEconomyForPlayer(gs, idx, "land");
   const bonusPct = Number(gs.settings.startTileBonusPercent || 0);
   const bonus = Math.max(0, Math.floor((gs.settings.goSalary || 0) * (bonusPct / 100)));
   if (bonus > 0) earnMoney(gs, idx, bonus, `START tile bonus (${bonusPct}%)`);
